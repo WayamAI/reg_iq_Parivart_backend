@@ -37,6 +37,8 @@ class DocumentResponse(DocumentBase):
     retrieved_at: datetime
     processing_status: DocumentProcessingStatus
     language: str = "en"
+    extracted_text: Optional[str] = None
+    parsed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

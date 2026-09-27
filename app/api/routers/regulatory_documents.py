@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from app.db.database import get_db
 from app.services.document_service import upload_and_create_document
+from app.services.document_processing import process_document_background
 from app.api.schemas.document import DocumentUploadResponse, DocumentResponse
 from app.api.dependencies.auth import get_current_user
 from app.models.user import User
@@ -11,6 +13,7 @@ router = APIRouter(prefix="/documents", tags=["Regulatory Documents"])
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: str = Form(...),
     description: Optional[str] = Form(None),
@@ -49,6 +52,10 @@ async def upload_document(
         source_url=source_url,
     )
 
+    # If not a duplicate, schedule background processing
+    if not is_duplicate:
+        background_tasks.add_task(process_document_background, document.id)
+
     # Return the response
     return DocumentUploadResponse(
         document_id=document.id,
@@ -56,6 +63,52 @@ async def upload_document(
         message="Document uploaded successfully" if not is_duplicate else "Document already exists (duplicate)",
         is_duplicate=is_duplicate,
     )
+
+@router.post("/{document_id}/process", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_document_processing(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verify the document exists and belongs to the user's organization
+    result = await db.execute(
+        select(RegulatoryDocument)
+        .where(
+            RegulatoryDocument.id == document_id,
+            RegulatoryDocument.organization_id == current_user.organization_id
+        )
+    )
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Schedule background processing
+    background_tasks.add_task(process_document_background, document_id)
+
+    return {"message": "Document processing started", "document_id": document_id}
+
+@router.get("/{document_id}/status")
+async def get_document_status(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(RegulatoryDocument)
+        .where(
+            RegulatoryDocument.id == document_id,
+            RegulatoryDocument.organization_id == current_user.organization_id
+        )
+    )
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "document_id": document.id,
+        "processing_status": document.processing_status,
+        "parsed_at": document.parsed_at,
+    }
 
 # Additional endpoints for documents can be added here (get, list, delete, etc.)
 @router.get("/", response_model=list[DocumentResponse])
@@ -92,5 +145,3 @@ async def get_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     return document
-
-from sqlalchemy import select

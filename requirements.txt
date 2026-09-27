@@ -12,3 +12,6 @@ python-multipart
 httpx
 python-dotenv
 structlog
+pypdf
+python-docx
+beautifulsoup4

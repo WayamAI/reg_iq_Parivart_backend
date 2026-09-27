@@ -1,6 +1,7 @@
 import hashlib
 import os
-from typing import BinaryIO, Tuple
+from datetime import datetime
+from typing import BinaryIO, Tuple, Optional
 from app.storage.base import LocalStorage
 from app.db.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +46,6 @@ async def create_document_record(
     retrieved_at: Optional[datetime] = None,
 ) -> RegulatoryDocument:
     """Create a new RegulatoryDocument record."""
-    from datetime import datetime
     if retrieved_at is None:
         retrieved_at = datetime.utcnow()
 
