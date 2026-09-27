@@ -2,7 +2,8 @@ fastapi
 uvicorn
 sqlalchemy
 alembic
-psycopg2-binary
+asyncpg
+aiosqlite
 pydantic
 pydantic-settings
 python-jose[cryptography]

@@ -19,5 +19,14 @@
 - [x] Endpoints to trigger source runs and list run history
 - [x] Tenant isolation: sources and authorities are not tied to a specific organization (they are global/configuration data)
 
+## Phase 3: Document Ingestion & Processing (Partially Completed)
+- [x] Document Model (`RegulatoryDocument`) and Versioning Model (`RegulatoryVersion`)
+- [x] Duplicate Detection via SHA-256
+- [x] Manual Document Upload Endpoint (`/api/v1/regulatory/documents/upload`)
+- [x] Document Upload Service with deduplication and storage abstraction
+- [ ] Document Processing Pipeline (parsing, versioning, text extraction, etc.)
+- [ ] Document Versioning Logic (automatically create new version on content change)
+- [ ] Background Processing for Document Pipeline
+
 ## Next Phase
-- **Phase 3: Document Ingestion & Processing**
+- **Phase 3 Continued: Document Processing Pipeline**
