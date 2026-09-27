@@ -1,7 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.routers import auth, authorities_router, sources_router, regulatory_documents
+from app.api.routers import (
+    auth,
+    authorities_router,
+    sources_router,
+    regulatory_documents,
+    products_router,
+    markets_router,
+    processes_router,
+    controls_router,
+    registrations_router,
+)
 
 app = FastAPI(
     title="PARIVART Backend API",
@@ -23,6 +33,11 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(authorities_router, prefix="/api/v1/regulatory")
 app.include_router(sources_router, prefix="/api/v1/regulatory")
 app.include_router(regulatory_documents.router, prefix="/api/v1/regulatory")
+app.include_router(products_router, prefix="/api/v1/portfolio")
+app.include_router(markets_router, prefix="/api/v1/portfolio")
+app.include_router(processes_router, prefix="/api/v1/portfolio")
+app.include_router(controls_router, prefix="/api/v1/portfolio")
+app.include_router(registrations_router, prefix="/api/v1/portfolio")
 
 @app.get("/health")
 def health_check():

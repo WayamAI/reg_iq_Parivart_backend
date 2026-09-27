@@ -37,5 +37,12 @@
 - [x] Intelligence Service to persist extracted changes and obligations
 - [x] Document Analysis Endpoint (to be added to document processing flow)
 
+## Phase 5: Portfolio Management (Completed)
+- [x] Portfolio Models: Product, Market, Process, Control, Registration, ProductMarket
+- [x] Portfolio Schemas for all models
+- [x] Portfolio Routers for CRUD operations on all portfolio entities
+- [x] Tenant isolation: all portfolio entities are scoped to organization_id
+- [x] Seeded demo data for Asterion Medical Systems (organization, users, products, markets, processes, controls, registrations, authorities, sources)
+
 ## Next Phase
-- **Phase 5: Portfolio Management (Products, Markets, Processes, Controls, Registrations)**
+- **Phase 6: Impact Assessment and Reports**
