@@ -5,13 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.models.document import RegulatoryDocument, RegulatoryVersion, DocumentProcessingStatus
 from app.processing.extraction import extract_text_from_file
+from app.ai.service import AIService
+from app.services.intelligence_service import persist_intelligence
 import structlog
 
 logger = structlog.get_logger()
 
 async def process_document(document_id: str, db: AsyncSession) -> bool:
     """
-    Process a regulatory document: extract text, create version, update status.
+    Process a regulatory document: extract text, run AI analysis, create version, update status.
     Returns True if successful, False otherwise.
     """
     try:
@@ -46,6 +48,15 @@ async def process_document(document_id: str, db: AsyncSession) -> bool:
         document.processing_status = DocumentProcessingStatus.PARSED
         await db.commit()
 
+        # Run AI analysis on the extracted text
+        logger.info("starting_ai_analysis", document_id=document_id)
+        ai_service = AIService()  # Uses default provider from settings
+        analysis_result = await ai_service.analyze_document(
+            extracted_text=extracted_text,
+            document_title=document.title
+        )
+        logger.info("ai_analysis_completed", document_id=document_id)
+
         # Create a version record
         # Check if there's an existing current version
         existing_version_result = await db.execute(
@@ -61,7 +72,6 @@ async def process_document(document_id: str, db: AsyncSession) -> bool:
         else:
             version_number = 1
 
-        # Create new version
         version = RegulatoryVersion(
             id=str(uuid.uuid4()),
             document_id=document.id,
@@ -74,14 +84,24 @@ async def process_document(document_id: str, db: AsyncSession) -> bool:
             previous_version_id=existing_version.id if existing_version else None,
         )
         db.add(version)
-        await db.commit()
+        await db.commit()  # Commit to get the version ID
 
-        # Update status to ANALYZING (next step would be AI analysis)
-        document.processing_status = DocumentProcessingStatus.ANALYZING
-        await db.commit()
+        # Persist the changes and obligations from the AI analysis
+        changes_created, obligations_created = await persist_intelligence(
+            db=db,
+            document_id=document.id,
+            version_id=version.id,
+            analysis_result=analysis_result,
+        )
+        logger.info(
+            "intelligence_persisted",
+            document_id=document_id,
+            version_id=version.id,
+            changes_count=len(changes_created),
+            obligations_count=len(obligations_created),
+        )
 
-        # TODO: Call AI analysis here (change detection, obligation extraction)
-        # For now, just mark as analyzed
+        # Update status to ANALYZED
         document.processing_status = DocumentProcessingStatus.ANALYZED
         await db.commit()
 

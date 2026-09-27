@@ -30,5 +30,12 @@
 - [x] Text Extraction for PDF, DOCX, HTML, TXT
 - [x] Document Status Endpoints (`/process`, `/status`)
 
+## Phase 4: Regulatory Intelligence (AI Pipeline) (Completed)
+- [x] AI Provider Abstraction (`AIProvider`) with Ollama and OpenAI implementations
+- [x] Structured AI Output Schemas for document analysis (summary, changes, obligations)
+- [x] AI Service to orchestrate document analysis with retry logic and validation
+- [x] Intelligence Service to persist extracted changes and obligations
+- [x] Document Analysis Endpoint (to be added to document processing flow)
+
 ## Next Phase
-- **Phase 4: Regulatory Intelligence (AI Pipeline)**
+- **Phase 5: Portfolio Management (Products, Markets, Processes, Controls, Registrations)**
