@@ -320,7 +320,9 @@ async def seed_demo_data(db: AsyncSession):
             "description": "Source for manually uploaded regulatory documents (e.g., PDFs, guidance documents).",
             "source_type": SourceType.DOCUMENT,
             "connector_type": ConnectorType.DOCUMENT,
-            "url": "",
+            # Manually uploaded documents have nothing to poll. The column is nullable;
+            # "" is not a URL and fails HttpUrl validation on the way back out.
+            "url": None,
             "enabled": True,
             "schedule": "manual",
         },
