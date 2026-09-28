@@ -28,4 +28,12 @@ async def get_current_user(
     user = result.scalars().first()
     if user is None:
         raise credentials_exception
+    if not user.is_active:
+        # Deactivating a user must take effect immediately. Without this, an access token
+        # issued before deactivation stays usable until it expires.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Inactive user",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
