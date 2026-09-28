@@ -7,6 +7,7 @@ from app.services.document_processing import process_document_background
 from app.api.schemas.document import DocumentUploadResponse, DocumentResponse
 from app.api.dependencies.auth import get_current_user
 from app.models.user import User
+from app.models import RegulatoryDocument
 from typing import Optional
 
 router = APIRouter(prefix="/documents", tags=["Regulatory Documents"])
