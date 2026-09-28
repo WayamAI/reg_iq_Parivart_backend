@@ -1,8 +1,9 @@
 from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, func, Integer, Numeric, Boolean
 from sqlalchemy.orm import relationship
+import enum
 from app.db.base import Base
 
-class ChangeType(str, Enum):
+class ChangeType(str, enum.Enum):
     NEW_REQUIREMENT = "NEW_REQUIREMENT"
     REQUIREMENT_CHANGE = "REQUIREMENT_CHANGE"
     DELETED_REQUIREMENT = "DELETED_REQUIREMENT"
@@ -15,7 +16,7 @@ class ChangeType(str, Enum):
     DEFINITION_CHANGE = "DEFINITION_CHANGE"
     OTHER = "OTHER"
 
-class ObligationCategory(str, Enum):
+class ObligationCategory(str, enum.Enum):
     LABELING = "LABELING"
     MANUFACTURING = "MANUFACTURING"
     QUALITY = "QUALITY"
@@ -38,7 +39,7 @@ class RegulatoryChange(Base):
     document_id = Column(String(36), ForeignKey("regulatory_documents.id"), index=True)
     version_id = Column(String(36), ForeignKey("regulatory_versions.id"), index=True)
     section = Column(String(500))
-    change_type = Column(Enum(ChangeType), nullable=False)
+    change_type = Column(Enum(ChangeType, native_enum=False), nullable=False)
     summary = Column(Text, nullable=False)
     previous_text = Column(Text)
     new_text = Column(Text)
@@ -51,7 +52,7 @@ class RegulatoryChange(Base):
     document = relationship("RegulatoryDocument", back_populates="changes")
     version = relationship("RegulatoryVersion", back_populates="changes")
     obligations = relationship("RegulatoryObligation", back_populates="change")
-    impact_assessments = relationship("ImpactAssessment", back_populates="change")
+    impact_assessments = relationship("ImpactAssessment", back_populates="regulatory_change")
 
 class RegulatoryObligation(Base):
     __tablename__ = "regulatory_obligations"
@@ -60,7 +61,7 @@ class RegulatoryObligation(Base):
     change_id = Column(String(36), ForeignKey("regulatory_changes.id"), index=True)
     document_id = Column(String(36), ForeignKey("regulatory_documents.id"), index=True)
     text = Column(Text, nullable=False)
-    category = Column(Enum(ObligationCategory), nullable=False)
+    category = Column(Enum(ObligationCategory, native_enum=False), nullable=False)
     applicability = Column(Text)
     jurisdiction = Column(String(100))
     effective_date = Column(DateTime(timezone=True))
@@ -73,4 +74,5 @@ class RegulatoryObligation(Base):
 
     change = relationship("RegulatoryChange", back_populates="obligations")
     document = relationship("RegulatoryDocument")
+    impact_items = relationship("ImpactItem", back_populates="obligation")
     impact_items = relationship("ImpactItem", back_populates="obligation")

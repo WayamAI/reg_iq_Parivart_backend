@@ -1,22 +1,23 @@
 from sqlalchemy import Column, String, Text, DateTime, Enum, Boolean, ForeignKey, func, Integer
 from sqlalchemy.orm import relationship
+import enum
 from app.db.base import Base
 
-class ConnectorType(str, Enum):
+class ConnectorType(str, enum.Enum):
     RSS = "RSS"
     API = "API"
     WEB_SERVICE = "WEB_SERVICE"
     HTML = "HTML"
     DOCUMENT = "DOCUMENT"
 
-class SourceType(str, Enum):
+class SourceType(str, enum.Enum):
     RSS = "RSS"
     API = "API"
     WEB_SERVICE = "WEB_SERVICE"
     HTML = "HTML"
     DOCUMENT = "DOCUMENT"
 
-class IngestionStatus(str, Enum):
+class IngestionStatus(str, enum.Enum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
@@ -48,8 +49,8 @@ class RegulatorySource(Base):
     description = Column(Text)
     jurisdiction = Column(String(100))
     country = Column(String(100))
-    source_type = Column(Enum(SourceType), nullable=False)
-    connector_type = Column(Enum(ConnectorType), nullable=False)
+    source_type = Column(Enum(SourceType, native_enum=False), nullable=False)
+    connector_type = Column(Enum(ConnectorType, native_enum=False), nullable=False)
     url = Column(String(1000))
     enabled = Column(Boolean, default=True)
     schedule = Column(String(100))
@@ -70,7 +71,7 @@ class IngestionRun(Base):
     source_id = Column(String(36), ForeignKey("regulatory_sources.id"), index=True)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True))
-    status = Column(Enum(IngestionStatus), default=IngestionStatus.QUEUED)
+    status = Column(Enum(IngestionStatus, native_enum=False), default=IngestionStatus.QUEUED)
     documents_discovered = Column(Integer, default=0)
     documents_downloaded = Column(Integer, default=0)
     documents_processed = Column(Integer, default=0)
