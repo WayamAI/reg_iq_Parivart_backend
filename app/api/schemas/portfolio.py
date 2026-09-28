@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing import Optional, List
 from app.models.portfolio import (
     ProductStatus,
@@ -37,7 +37,7 @@ class ProductResponse(ProductBase):
     id: str
     organization_id: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -64,7 +64,7 @@ class MarketResponse(MarketBase):
     id: str
     organization_id: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -90,7 +90,7 @@ class ProductMarketUpdate(BaseModel):
 class ProductMarketResponse(ProductMarketBase):
     id: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -113,7 +113,7 @@ class ProcessResponse(ProcessBase):
     id: str
     organization_id: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -144,13 +144,15 @@ class ControlResponse(ControlBase):
     id: str
     organization_id: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
 
 # Registration Schemas
 class RegistrationBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
     product_id: str
     market_id: str
     authority_id: str
@@ -158,12 +160,18 @@ class RegistrationBase(BaseModel):
     status: RegistrationStatus = RegistrationStatus.PENDING
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    metadata: Optional[str] = None
+    registration_metadata: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("registration_metadata", "metadata"),
+        serialization_alias="metadata",
+    )
 
 class RegistrationCreate(RegistrationBase):
     pass
 
 class RegistrationUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
     product_id: Optional[str] = None
     market_id: Optional[str] = None
     authority_id: Optional[str] = None
@@ -171,13 +179,18 @@ class RegistrationUpdate(BaseModel):
     status: Optional[RegistrationStatus] = None
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    metadata: Optional[str] = None
+    registration_metadata: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("registration_metadata", "metadata"),
+        serialization_alias="metadata",
+    )
 
 class RegistrationResponse(RegistrationBase):
+    model_config = ConfigDict(
+        populate_by_name=True, serialize_by_alias=True, from_attributes=True
+    )
+
     id: str
     organization_id: str
     created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
+    updated_at: Optional[datetime] = None

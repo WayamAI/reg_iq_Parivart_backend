@@ -40,7 +40,7 @@ class DocumentResponse(DocumentBase):
     extracted_text: Optional[str] = None
     parsed_at: Optional[datetime] = None
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

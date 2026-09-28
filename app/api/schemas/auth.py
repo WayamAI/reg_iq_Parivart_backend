@@ -20,7 +20,11 @@ class OrganizationResponse(OrganizationBase):
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
-    password: str
+    # bcrypt hashes at most 72 bytes. Constraining the field here rejects longer input as
+    # a 422 with a clear message instead of failing inside hash_password(). Multi-byte
+    # passwords that fit in 72 characters but exceed 72 bytes are caught by the
+    # PasswordTooLongError handler in app/main.py.
+    password: str = Field(min_length=8, max_length=72)
     role: UserRole = UserRole.VIEWER
 
 class UserResponse(BaseModel):

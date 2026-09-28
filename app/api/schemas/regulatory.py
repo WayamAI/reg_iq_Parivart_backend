@@ -28,7 +28,7 @@ class AuthorityUpdate(BaseModel):
 class AuthorityResponse(AuthorityBase):
     id: str
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -66,7 +66,7 @@ class SourceResponse(SourceBase):
     last_success_at: Optional[datetime] = None
     last_error: Optional[str] = None
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
