@@ -26,7 +26,7 @@ async def persist_intelligence(
         try:
             change_type_enum = ChangeType(change_data.change_type)
         except ValueError:
-            logger.warning("invalid_change_type", change_type=change_data.change_type, defaulting_to_OTHER)
+            logger.warning("invalid_change_type: %s", change_data.change_type)
             change_type_enum = ChangeType.OTHER
 
         change = RegulatoryChange(
@@ -51,7 +51,7 @@ async def persist_intelligence(
         try:
             obligation_category_enum = ObligationCategory(obligation_data.category)
         except ValueError:
-            logger.warning("invalid_obligation_category", category=obligation_data.category, defaulting_to_OTHER)
+            logger.warning("invalid_obligation_category: %s", obligation_data.category)
             obligation_category_enum = ObligationCategory.OTHER
 
         obligation = RegulatoryObligation(
