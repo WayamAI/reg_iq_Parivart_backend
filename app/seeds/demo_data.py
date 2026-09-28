@@ -10,6 +10,7 @@ from app.models.portfolio import (
     ProductStatus,
     Market,
     MarketStatus,
+    ProductMarket,
     Process,
     Control,
     ControlCategory,
@@ -19,29 +20,33 @@ from app.models.portfolio import (
 )
 from app.models.regulatory import RegulatoryAuthority, RegulatorySource, ConnectorType, SourceType, IngestionStatus
 
+async def _exists(db: AsyncSession, model, *conditions) -> bool:
+    result = await db.execute(select(model.id).where(*conditions).limit(1))
+    return result.scalars().first() is not None
+
+
 async def seed_demo_data(db: AsyncSession):
     """
-    Seed the demo organization Asterion Medical Systems and related data.
-    This function should be called once to set up the demo data.
+    Seed the demo organization Asterion Medical Systems and its portfolio.
+
+    Idempotent per entity rather than all-or-nothing. An earlier version returned early if
+    the organization already existed, so a database where the organization had been created
+    by hand (or where a previous seed failed part-way) could never be topped up and was
+    left with an empty portfolio. Nothing here overwrites or deletes existing rows.
     """
-    # Check if demo organization already exists
     result = await db.execute(select(Organization).where(Organization.slug == "asterion-medical-systems"))
     org = result.scalars().first()
-    if org:
-        print("Demo data already seeded. Skipping.")
-        return org
-
-    # Create demo organization
-    org_id = str(uuid.uuid4())
-    org = Organization(
-        id=org_id,
-        name="Asterion Medical Systems",
-        slug="asterion-medical-systems",
-        industry="Medical Devices",
-        description="A leading medical device company focused on innovative monitoring and therapeutic solutions.",
-    )
-    db.add(org)
-    await db.flush()  # To get the ID without committing yet
+    if org is None:
+        org = Organization(
+            id=str(uuid.uuid4()),
+            name="Asterion Medical Systems",
+            slug="asterion-medical-systems",
+            industry="Medical Devices",
+            description="A leading medical device company focused on innovative monitoring and therapeutic solutions.",
+        )
+        db.add(org)
+        await db.flush()
+    org_id = org.id
 
     # Create demo admin user
     admin_id = str(uuid.uuid4())
@@ -54,7 +59,8 @@ async def seed_demo_data(db: AsyncSession):
         role=UserRole.ADMIN,
         is_active=True,
     )
-    db.add(admin_user)
+    if not await _exists(db, User, User.email == admin_user.email):
+        db.add(admin_user)
 
     # Create demo regular user (analyst)
     analyst_id = str(uuid.uuid4())
@@ -67,7 +73,9 @@ async def seed_demo_data(db: AsyncSession):
         role=UserRole.ANALYST,
         is_active=True,
     )
-    db.add(analyst_user)
+    if not await _exists(db, User, User.email == analyst_user.email):
+        db.add(analyst_user)
+    await db.flush()
 
     # Create markets for the demo organization
     markets_data = [
@@ -79,6 +87,7 @@ async def seed_demo_data(db: AsyncSession):
     ]
 
     market_objects = []
+    seed_markets = not await _exists(db, Market, Market.organization_id == org_id)
     for market_data in markets_data:
         market_id = str(uuid.uuid4())
         market = Market(
@@ -90,7 +99,8 @@ async def seed_demo_data(db: AsyncSession):
             regulatory_jurisdiction=market_data["regulatory_jurisdiction"],
             status=MarketStatus.ACTIVE,
         )
-        db.add(market)
+        if seed_markets:
+            db.add(market)
         market_objects.append(market)
 
     # Create products for the demo organization
@@ -103,6 +113,7 @@ async def seed_demo_data(db: AsyncSession):
     ]
 
     product_objects = []
+    seed_products = not await _exists(db, Product, Product.organization_id == org_id)
     for product_data in products_data:
         product_id = str(uuid.uuid4())
         product = Product(
@@ -117,7 +128,8 @@ async def seed_demo_data(db: AsyncSession):
             regulatory_class=product_data["regulatory_class"],
             keywords=f"{product_data['name']}, {product_data['category']}, {product_data['sub_category']}",
         )
-        db.add(product)
+        if seed_products:
+            db.add(product)
         product_objects.append(product)
 
     # Create processes for the demo organization
@@ -134,6 +146,7 @@ async def seed_demo_data(db: AsyncSession):
     ]
 
     process_objects = []
+    seed_processes = not await _exists(db, Process, Process.organization_id == org_id)
     for process_name in processes_data:
         process_id = str(uuid.uuid4())
         process = Process(
@@ -143,7 +156,8 @@ async def seed_demo_data(db: AsyncSession):
             description=f"Process for {process_name} in medical device lifecycle.",
             category="Operational",
         )
-        db.add(process)
+        if seed_processes:
+            db.add(process)
         process_objects.append(process)
 
     # Create controls for the demo organization (example: link some controls to products and processes)
@@ -176,6 +190,7 @@ async def seed_demo_data(db: AsyncSession):
     ]
 
     control_objects = []
+    seed_controls = not await _exists(db, Control, Control.organization_id == org_id)
     for control_data in controls_data:
         control_id = str(uuid.uuid4())
         # For simplicity, we won't link to specific products/processes in this seed, but we could.
@@ -190,12 +205,16 @@ async def seed_demo_data(db: AsyncSession):
             owner=control_data["owner"],
             status=ControlStatus.ACTIVE,
         )
-        db.add(control)
+        if seed_controls:
+            db.add(control)
         control_objects.append(control)
 
     # Create some example product-market relationships (for demonstration, link first two products to first three markets)
     # In a real system, these would be more comprehensive.
-    for i, product in enumerate(product_objects[:2]):  # First two products
+    seed_links = seed_products and seed_markets and not await _exists(
+        db, ProductMarket, ProductMarket.product_id.in_([p.id for p in product_objects])
+    )
+    for i, product in enumerate(product_objects[:2] if seed_links else []):  # First two products
         for j, market in enumerate(market_objects[:3]):  # First three markets
             product_market_id = str(uuid.uuid4())
             product_market = ProductMarket(
@@ -342,5 +361,5 @@ async def seed_demo_data(db: AsyncSession):
 
     # Commit all the seeded data
     await db.commit()
-    print(f"Seeded demo organization: {org.name} (ID: org.id)")
+    print(f"Seeded demo organization: {org.name} (ID: {org.id})")
     return org

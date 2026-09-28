@@ -7,7 +7,7 @@ aiosqlite
 pydantic
 pydantic-settings
 python-jose[cryptography]
-passlib[bcrypt]
+bcrypt
 python-multipart
 httpx
 python-dotenv
@@ -16,3 +16,5 @@ pypdf
 python-docx
 beautifulsoup4
 openai
+greenlet
+email-validator
