@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 from typing import Optional, List
 from app.models.regulatory import ConnectorType, SourceType, IngestionStatus
 from datetime import datetime
@@ -45,6 +45,17 @@ class SourceBase(BaseModel):
     url: Optional[HttpUrl] = None
     enabled: bool = True
     schedule: Optional[str] = None
+
+    # A DOCUMENT/manual source has no URL to poll. The column is nullable, so "no URL" is
+    # NULL -- but rows exist that store it as an empty string, and HttpUrl rejects "" as
+    # "input is empty". That surfaced as a 500 (ResponseValidationError) on GET
+    # /regulatory/sources/ rather than as a bad request, because it failed on the way out.
+    @field_validator("url", mode="before")
+    @classmethod
+    def _empty_url_is_absent(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 class SourceCreate(SourceBase):
     pass
