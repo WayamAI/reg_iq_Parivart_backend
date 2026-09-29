@@ -186,6 +186,31 @@ async def test_invalid_priority_is_422(client, demo_org, auth_headers):
     assert res.status_code == 422, res.text
 
 
+async def test_omitted_priority_defaults_to_medium(client, demo_org, auth_headers):
+    """
+    The served schema advertises ActionCreate.priority as optional with
+    `default: MEDIUM`, and the frontend's generated types encode that default rather
+    than sending a value of their own. Hold the API to the promise its own OpenAPI
+    makes, so the default cannot quietly become null or a validation error.
+    """
+    res = await client.post(
+        "/api/v1/actions/", json={"title": "No priority supplied"}, headers=auth_headers
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["priority"] == "MEDIUM"
+
+
+async def test_action_create_schema_marks_only_title_required(client):
+    """
+    Client types are generated from this schema, so the required set is part of the
+    contract. If `priority` ever became required, every generated client that relies
+    on the default would start failing validation.
+    """
+    schema = client._transport.app.openapi()["components"]["schemas"]["ActionCreate"]
+    assert schema["required"] == ["title"]
+    assert schema["properties"]["priority"]["default"] == "MEDIUM"
+
+
 async def test_blank_action_title_is_422(client, demo_org, auth_headers):
     res = await client.post(
         "/api/v1/actions/", json={"title": ""}, headers=auth_headers
