@@ -9,6 +9,8 @@ from .portfolio_controls import router as controls_router
 from .portfolio_registrations import router as registrations_router
 from .impact import router as impact_router
 from .reports import router as reports_router
+from .reviews import router as reviews_router
+from .actions import router as actions_router
 
 __all__ = [
     "auth_router",
@@ -22,4 +24,6 @@ __all__ = [
     "registrations_router",
     "impact_router",
     "reports_router",
+    "reviews_router",
+    "actions_router",
 ]
