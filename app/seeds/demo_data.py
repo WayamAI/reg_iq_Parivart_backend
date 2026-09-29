@@ -361,6 +361,87 @@ async def seed_demo_data(db: AsyncSession):
                 )
                 db.add(source)
 
+    # Create registrations linking the demo products to the markets they are approved in.
+    #
+    # These were missing, which left the registration matching rule unable to fire: the
+    # engine scores REGISTRATION_MATCH against the publishing authority and the resolved
+    # market, so with an empty registrations table an assessment could never show a
+    # product's market authorisation as exposed.
+    #
+    # Everything here is read back from the database rather than taken from the objects
+    # built above, because those are only persisted on a first run -- on an already-seeded
+    # database they are unsaved instances carrying ids that were never written.
+    await db.flush()
+
+    market_jurisdiction_to_authority = {
+        "FDA": "FDA",
+        "EMA": "EMA",
+        "MHRA": "MHRA",
+        "CDSCO": "CDSCO",
+        "Health Canada": "HC",
+    }
+    # Each product's approved markets, by market name. Deliberately uneven: a portfolio
+    # where every product is registered everywhere makes impact analysis look trivial.
+    product_registrations = {
+        "Asterion PulseSense": ["United States", "European Union", "United Kingdom"],
+        "Asterion CardioTrack": ["United States", "European Union"],
+        "Asterion NeoMonitor": ["United States", "Canada"],
+        "Asterion VitalHub": ["European Union", "United Kingdom", "India"],
+        "Asterion InfuFlow": ["United States", "India"],
+    }
+
+    persisted_products = {
+        p.name: p
+        for p in (
+            await db.execute(select(Product).where(Product.organization_id == org_id))
+        ).scalars().all()
+    }
+    persisted_markets = {
+        m.name: m
+        for m in (
+            await db.execute(select(Market).where(Market.organization_id == org_id))
+        ).scalars().all()
+    }
+    persisted_authorities = {
+        a.short_name: a
+        for a in (await db.execute(select(RegulatoryAuthority))).scalars().all()
+    }
+
+    for product_name, market_names in product_registrations.items():
+        product = persisted_products.get(product_name)
+        if product is None:
+            continue
+        for market_name in market_names:
+            market = persisted_markets.get(market_name)
+            if market is None:
+                continue
+            authority = persisted_authorities.get(
+                market_jurisdiction_to_authority.get(market.regulatory_jurisdiction, "")
+            )
+            if await _exists(
+                db,
+                Registration,
+                Registration.product_id == product.id,
+                Registration.market_id == market.id,
+            ):
+                continue
+            db.add(
+                Registration(
+                    id=str(uuid.uuid4()),
+                    organization_id=org_id,
+                    product_id=product.id,
+                    market_id=market.id,
+                    authority_id=authority.id if authority else None,
+                    registration_number=(
+                        f"{product.product_code}-{market.country}-"
+                        f"{market.regulatory_jurisdiction.replace(' ', '')}"
+                    ),
+                    status=RegistrationStatus.ACTIVE,
+                    valid_from=datetime(2023, 1, 1, tzinfo=timezone.utc),
+                    valid_until=datetime(2028, 1, 1, tzinfo=timezone.utc),
+                )
+            )
+
     # Commit all the seeded data
     await db.commit()
     print(f"Seeded demo organization: {org.name} (ID: {org.id})")
