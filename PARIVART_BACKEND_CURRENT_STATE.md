@@ -66,7 +66,41 @@
 - [x] Demo seed made idempotent per entity -- it previously returned early if the organization existed, leaving partially-seeded databases permanently empty
 - [x] Tests enforce SQLite foreign keys so dangling references fail in tests rather than only in production on PostgreSQL
 
+## Phase 7: Human Review & Actions (Completed)
+- [x] `ImpactReview` completed: `organization_id` denormalised from the parent assessment so
+  review queries are tenant-scoped without a join, plus `new_state` alongside `previous_state`
+  so a row records where a decision led as well as where it came from
+- [x] `Action` completed: `completed_at`, and `priority` promoted from a free-form `String(20)`
+  to an `ActionPriority` enum
+- [x] `ACTION_TRANSITIONS` as the single source of truth for the action state machine, with
+  `COMPLETED` and `CANCELLED` terminal. The partial-update path goes through the same check,
+  so it is not a back door around the machine
+- [x] Reviews are append-only: a changed mind files a new row rather than rewriting an old
+  one, and filing a decision moves the assessment in the same unit of work
+- [x] Services scope every query to an organization; a cross-tenant id reads as 404, never 403
+- [x] Tenant and reviewer identity taken from the access token, not the request body
+- [x] REST API routers (`/api/v1/reviews`, `/api/v1/actions`)
+- [x] Alembic revision `0002_phase7`, written to be safe on a populated database
+- [x] Tests: model constraints, both services, the HTTP contract, state conflicts, tenant
+  isolation, and identity spoofing attempts
+
+## Migrations
+- [x] Alembic environment added (`alembic.ini`, `migrations/`). The project had `alembic` in
+  `requirements.txt` but no environment, so the schema had only ever been applied ad hoc --
+  which is how the deployed database ended up missing columns the models had already grown
+- [x] `0001_baseline` — the Phase 6 schema as deployed, for stamping an existing database
+- [x] `0002_phase7` — the review and action changes
+- [x] `0003_enrichment_not_null` — corrects real drift found by `alembic check` against the
+  deployed database: `impact_assessments.ai_enrichment_status` was nullable there despite the
+  model declaring it NOT NULL, because it had been added by an ad-hoc script
+
+## Seeds
+- [x] Registrations added. The seed imported `Registration` and never created one, which left
+  `registration_evidence()` unable to fire: with an empty table, an assessment could never show
+  a product's market authorisation as exposed
+
 ## Next Phase
-- **Phase 7: Execution, Evidence & Audit** — models only so far (`app/models/governance.py`:
-  `Action`, `Evidence`, `AuditEvent`, `ImpactReview`). They exist because `Organization` and
-  `User` already declared relationships to them; no routers, schemas or seed data yet.
+- **Phase 8: Evidence & Audit Trail** — the `evidence` and `audit_events` tables exist and are
+  migrated, but nothing writes to them. No service, router or schema yet. (The `Evidence` name
+  in `app/matching/rules.py` is an unrelated local dataclass carrying match provenance, not
+  this table.)
