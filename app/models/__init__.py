@@ -11,7 +11,10 @@ from app.models.impact import (
     AIEnrichmentStatus,
 )
 from app.models.governance import (
+    ACTION_TRANSITIONS,
+    TERMINAL_ACTION_STATUSES,
     Action,
+    ActionPriority,
     ActionStatus,
     Evidence,
     AuditEvent,
@@ -40,7 +43,10 @@ __all__ = [
     "ImpactItem",
     "ImpactReport",
     "AIEnrichmentStatus",
+    "ACTION_TRANSITIONS",
+    "TERMINAL_ACTION_STATUSES",
     "Action",
+    "ActionPriority",
     "ActionStatus",
     "Evidence",
     "AuditEvent",

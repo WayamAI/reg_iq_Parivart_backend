@@ -24,5 +24,6 @@ class Organization(Base):
     impact_assessments = relationship("ImpactAssessment", back_populates="organization")
     impact_reports = relationship("ImpactReport", back_populates="organization")
     actions = relationship("Action", back_populates="organization")
+    reviews = relationship("ImpactReview", back_populates="organization")
     evidence = relationship("Evidence", back_populates="organization")
     audit_events = relationship("AuditEvent", back_populates="organization")
