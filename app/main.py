@@ -17,6 +17,7 @@ from app.api.routers import (
     actions_router,
     audit_router,
     evidence_router,
+    intelligence_router,
 )
 from app.core.config import settings
 from app.core.errors import (
@@ -66,6 +67,7 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(authorities_router, prefix="/api/v1/regulatory")
 app.include_router(sources_router, prefix="/api/v1/regulatory")
 app.include_router(regulatory_documents.router, prefix="/api/v1/regulatory")
+app.include_router(intelligence_router, prefix="/api/v1/regulatory")
 app.include_router(products_router, prefix="/api/v1/portfolio")
 app.include_router(markets_router, prefix="/api/v1/portfolio")
 app.include_router(processes_router, prefix="/api/v1/portfolio")

@@ -13,6 +13,7 @@ from .reviews import router as reviews_router
 from .actions import router as actions_router
 from .audit import router as audit_router
 from .evidence import router as evidence_router
+from .regulatory_intelligence import router as intelligence_router
 
 __all__ = [
     "auth_router",
@@ -30,4 +31,5 @@ __all__ = [
     "actions_router",
     "audit_router",
     "evidence_router",
+    "intelligence_router",
 ]
