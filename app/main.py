@@ -15,6 +15,7 @@ from app.api.routers import (
     reports_router,
     reviews_router,
     actions_router,
+    audit_router,
 )
 from app.core.config import settings
 from app.core.errors import (
@@ -73,6 +74,7 @@ app.include_router(impact_router, prefix="/api/v1")
 app.include_router(reports_router, prefix="/api/v1")
 app.include_router(reviews_router, prefix="/api/v1")
 app.include_router(actions_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
 
 
 # --- Health ----------------------------------------------------------------------------
