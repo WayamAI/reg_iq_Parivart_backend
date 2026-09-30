@@ -1,6 +1,7 @@
 import hashlib
 import os
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import BinaryIO, Tuple, Optional
 from app.storage.base import LocalStorage
 from app.db.database import get_db
@@ -47,9 +48,15 @@ async def create_document_record(
 ) -> RegulatoryDocument:
     """Create a new RegulatoryDocument record."""
     if retrieved_at is None:
-        retrieved_at = datetime.utcnow()
+        # tz-aware: retrieved_at is DateTime(timezone=True), and a naive value is
+        # stored as if it were local time.
+        retrieved_at = datetime.now(timezone.utc)
 
     document = RegulatoryDocument(
+        # RegulatoryDocument.id is a String(36) primary key with no column default,
+        # and Base is a plain declarative_base() with no id mixin, so an omitted id
+        # is inserted as NULL and the insert fails.
+        id=str(uuid.uuid4()),
         organization_id=organization_id,
         authority_id=authority_id,
         source_id=source_id,
