@@ -24,6 +24,11 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.models.document import RegulatoryDocument
+from app.services.audit_service import (
+    ENTITY_IMPACT_REPORT,
+    EVENT_REPORT_GENERATED,
+    AuditService,
+)
 from app.models.impact import (
     AIEnrichmentStatus,
     EntityType,
@@ -79,8 +84,14 @@ class ReportService:
         organization_id: str,
         impact_assessment_id: str,
         title: str = None,
+        actor_id: str = None,
     ) -> ImpactReport:
-        """Generate a versioned, auditable Impact Delta Report for an ImpactAssessment."""
+        """
+        Generate a versioned, auditable Impact Delta Report for an ImpactAssessment.
+
+        `actor_id` is recorded on the audit trail: a report is a document someone
+        produced, and the trail should say who.
+        """
         result = await db.execute(
             select(ImpactAssessment)
             .options(selectinload(ImpactAssessment.items))
@@ -137,6 +148,19 @@ class ReportService:
             report_data=json.dumps(report_payload),
         )
         db.add(report)
+        AuditService.record(
+            db,
+            organization_id=organization_id,
+            actor_id=actor_id,
+            event_type=EVENT_REPORT_GENERATED,
+            entity_type=ENTITY_IMPACT_REPORT,
+            entity_id=report.id,
+            payload={
+                "impact_assessment_id": impact_assessment_id,
+                "version": report.version,
+                "supersedes_version": previous.version if previous else None,
+            },
+        )
         await db.commit()
         await db.refresh(report)
         return report

@@ -53,6 +53,7 @@ async def generate_report(
             organization_id=current_user.organization_id,
             impact_assessment_id=payload.impact_assessment_id,
             title=payload.title,
+            actor_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

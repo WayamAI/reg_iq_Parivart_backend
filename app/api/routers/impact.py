@@ -75,6 +75,7 @@ async def analyze_impact(
             organization_id=current_user.organization_id,
             regulatory_change_id=payload.regulatory_change_id,
             force_reanalyze=payload.force_reanalyze,
+            actor_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -169,6 +170,7 @@ async def reanalyze_impact(
             organization_id=current_user.organization_id,
             regulatory_change_id=assessment.regulatory_change_id,
             force_reanalyze=True,
+            actor_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

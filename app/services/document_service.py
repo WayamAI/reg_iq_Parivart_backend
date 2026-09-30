@@ -8,6 +8,11 @@ from app.db.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.models.document import RegulatoryDocument
+from app.services.audit_service import (
+    ENTITY_REGULATORY_DOCUMENT,
+    EVENT_DOCUMENT_UPLOADED,
+    AuditService,
+)
 from app.core.config import settings
 
 # Initialize storage (using local storage for now)
@@ -45,6 +50,7 @@ async def create_document_record(
     file_size: int,
     sha256: str,
     retrieved_at: Optional[datetime] = None,
+    actor_id: Optional[str] = None,
 ) -> RegulatoryDocument:
     """Create a new RegulatoryDocument record."""
     if retrieved_at is None:
@@ -74,6 +80,25 @@ async def create_document_record(
         processing_status="DISCOVERED",  # Start with discovered
     )
     db.add(document)
+    # Recorded before the commit, so the document and the event announcing it are one
+    # unit of work. Only a genuinely new document reaches here: a duplicate returns
+    # earlier and records nothing, because nothing was added.
+    AuditService.record(
+        db,
+        organization_id=organization_id,
+        actor_id=actor_id,
+        event_type=EVENT_DOCUMENT_UPLOADED,
+        entity_type=ENTITY_REGULATORY_DOCUMENT,
+        entity_id=document.id,
+        payload={
+            "title": title,
+            "document_type": document_type,
+            "sha256": sha256,
+            "authority_id": authority_id,
+            "source_id": source_id,
+            "file_size": file_size,
+        },
+    )
     await db.commit()
     await db.refresh(document)
     return document
@@ -93,6 +118,7 @@ async def upload_and_create_document(
     jurisdiction: Optional[str] = None,
     country: Optional[str] = None,
     source_url: Optional[str] = None,
+    actor_id: Optional[str] = None,
 ) -> Tuple[RegulatoryDocument, bool]:
     """
     Upload a file, check for duplicates, and create a document record.
@@ -131,6 +157,7 @@ async def upload_and_create_document(
         mime_type=content_type,
         file_size=file_size,
         sha256=sha256,
+        actor_id=actor_id,
     )
 
     return document, False

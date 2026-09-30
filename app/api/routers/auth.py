@@ -10,6 +10,11 @@ from app.models.user import User, UserRole
 from app.models.organization import Organization
 from app.api.schemas.auth import UserCreate, UserResponse, TokenResponse, OrganizationCreate
 from app.api.dependencies.auth import get_current_user
+from app.services.audit_service import (
+    ENTITY_USER,
+    EVENT_USER_SIGNED_IN,
+    AuditService,
+)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -82,6 +87,22 @@ async def login(
         )
 
     access_token = create_access_token(data={"sub": user.email})
+
+    # A successful sign-in is recorded; a failed one is not. Failed attempts belong in
+    # the security log, not in a tenant-readable audit trail, and recording them here
+    # would mean writing rows on behalf of a caller who has not authenticated.
+    # The payload carries no token and no credential.
+    AuditService.record(
+        db,
+        organization_id=user.organization_id,
+        actor_id=user.id,
+        event_type=EVENT_USER_SIGNED_IN,
+        entity_type=ENTITY_USER,
+        entity_id=user.id,
+        payload={"role": user.role},
+    )
+    await db.commit()
+
     return {
         "access_token": access_token,
         "token_type": "bearer",

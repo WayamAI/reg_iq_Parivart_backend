@@ -21,6 +21,12 @@ from sqlalchemy.future import select
 from app.matching import rules
 from app.matching.rules import ENGINE_VERSION, EntityMatch, Evidence
 from app.models.document import RegulatoryDocument
+from app.services.audit_service import (
+    ENTITY_IMPACT_ASSESSMENT,
+    EVENT_IMPACT_ASSESSMENT_CREATED,
+    EVENT_IMPACT_ASSESSMENT_REANALYZED,
+    AuditService,
+)
 from app.models.impact import (
     AIEnrichmentStatus,
     EntityType,
@@ -50,12 +56,17 @@ class MatchingEngineService:
         organization_id: str,
         regulatory_change_id: str,
         force_reanalyze: bool = False,
+        actor_id: Optional[str] = None,
     ) -> ImpactAssessment:
         """
         Run deterministic portfolio matching for a regulatory change and organization.
 
         Idempotent unless force_reanalyze is True: a second call returns the existing
         assessment instead of creating a duplicate.
+
+        `actor_id` is recorded on the audit trail. Because this method is idempotent,
+        a reused assessment records nothing: no analysis was run, so there is no
+        change to describe.
         """
         existing = await MatchingEngineService._latest_assessment(
             db, organization_id, regulatory_change_id
@@ -85,6 +96,7 @@ class MatchingEngineService:
             matches=matches,
             obligation_count=len(obligations),
             previous=existing,
+            actor_id=actor_id,
         )
 
     # ------------------------------------------------------------------ loading
@@ -346,6 +358,7 @@ class MatchingEngineService:
         matches: List[EntityMatch],
         obligation_count: int,
         previous: Optional[ImpactAssessment],
+        actor_id: Optional[str] = None,
     ) -> ImpactAssessment:
         overall_level, overall_confidence = rules.aggregate_overall(matches)
         assessment_id = str(uuid.uuid4())
@@ -398,6 +411,32 @@ class MatchingEngineService:
                     status="ACTIVE",
                 )
             )
+
+        # A reanalysis supersedes an earlier version rather than replacing it, and the
+        # trail distinguishes the two so "why is this at version 3?" is answerable.
+        # Recorded before the commit below, so an assessment and the event announcing
+        # it are one unit of work.
+        AuditService.record(
+            db,
+            organization_id=organization_id,
+            actor_id=actor_id,
+            event_type=(
+                EVENT_IMPACT_ASSESSMENT_REANALYZED
+                if previous is not None
+                else EVENT_IMPACT_ASSESSMENT_CREATED
+            ),
+            entity_type=ENTITY_IMPACT_ASSESSMENT,
+            entity_id=assessment_id,
+            payload={
+                "regulatory_change_id": change.id,
+                "analysis_version": assessment.analysis_version,
+                "engine_version": ENGINE_VERSION,
+                "item_count": len(matches),
+                "overall_impact_level": overall_level.value,
+                "obligations_considered": obligation_count,
+                "supersedes_version": previous.analysis_version if previous else None,
+            },
+        )
 
         await db.commit()
         await db.refresh(assessment)
