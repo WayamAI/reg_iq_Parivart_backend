@@ -31,6 +31,7 @@ from app.models.intelligence import (
     RegulatoryChange,
     RegulatoryObligation,
 )
+from app.models.user import User
 from app.models.regulatory import (
     ConnectorType,
     RegulatoryAuthority,
@@ -186,3 +187,62 @@ async def create_change(
 
     await session.commit()
     return change.id
+
+
+@pytest_asyncio.fixture
+async def seeded_assessment(client, demo_org, auth_headers):
+    """
+    A real assessment produced by a real deterministic analysis, plus the ids the
+    governance tests hang off it.
+
+    Built through the HTTP analyze endpoint rather than by inserting rows, so the
+    impact items are the ones the matching engine actually produces and an action or
+    a piece of evidence attached to one is attached to something real.
+    """
+    from app.models.impact import ImpactItem
+    from app.models.intelligence import ChangeType, ObligationCategory
+
+    async with AsyncSessionLocal() as session:
+        authority = await create_authority(
+            session, short_name="FDA", jurisdiction="United States", country="USA"
+        )
+        change_id = await create_change(
+            session,
+            organization_id=demo_org.id,
+            authority=authority,
+            summary=(
+                "Mandatory electronic labeling requirements for monitoring medical "
+                "devices in the US market."
+            ),
+            change_type=ChangeType.LABELING_CHANGE,
+            obligation_category=ObligationCategory.LABELING,
+        )
+
+    res = await client.post(
+        "/api/v1/impact/analyze",
+        json={"regulatory_change_id": change_id, "force_reanalyze": True},
+        headers=auth_headers,
+    )
+    assert res.status_code == 201, res.text
+    assessment_id = res.json()["id"]
+
+    async with AsyncSessionLocal() as session:
+        user = (
+            await session.execute(
+                select(User).where(User.organization_id == demo_org.id)
+            )
+        ).scalars().first()
+        item = (
+            await session.execute(
+                select(ImpactItem).where(
+                    ImpactItem.impact_assessment_id == assessment_id
+                )
+            )
+        ).scalars().first()
+        assert item is not None, "the analysis produced no impact items to attach to"
+        return {
+            "assessment_id": assessment_id,
+            "regulatory_change_id": change_id,
+            "user_id": user.id,
+            "impact_item_id": item.id,
+        }
