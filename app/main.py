@@ -1,6 +1,10 @@
-from fastapi import FastAPI
+import structlog
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.base import AIProviderFactory
 from app.api.routers import (
     auth,
     authorities_router,
@@ -26,6 +30,9 @@ from app.core.errors import (
     RequestContextMiddleware,
     register_exception_handlers,
 )
+from app.db.database import get_db
+
+logger = structlog.get_logger()
 
 app = FastAPI(
     title="PARIVART Backend API",
@@ -98,3 +105,38 @@ def readiness_check():
 @app.get("/health/live", tags=["Health"])
 def liveness_check():
     return {"status": "live"}
+
+
+# --- Status -----------------------------------------------------------------------------
+# Unlike /health, this one *does* touch its dependencies: it is the endpoint the frontend
+# and an operator use to tell "backend up but database degraded" from "backend up and
+# healthy". It therefore always answers 200 -- a degraded dependency is reported in the
+# body, never as an HTTP error, because a non-200 here would be indistinguishable from the
+# process being down.
+#
+# No secret ever enters this payload: no API key, no JWT secret, no database URL. The AI
+# block is read from configuration and the provider registry only -- it never calls a
+# provider, because a demo must not hang for AI_TIMEOUT_SECONDS on a status probe.
+@app.get("/status", tags=["Health"])
+async def status_check(db: AsyncSession = Depends(get_db)):
+    database = {"status": "up", "error": None}
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 - any failure is "down", never a 500
+        logger.warning("status_database_check_failed", error=str(exc))
+        database = {"status": "down", "error": str(exc)}
+
+    return {
+        "app": app.title,
+        "version": app.version,
+        "environment": settings.APP_ENV,
+        "database": database,
+        "ai": {
+            "enabled": settings.AI_ENRICHMENT_ENABLED,
+            "provider": settings.AI_PROVIDER,
+            "model": settings.AI_MODEL,
+            # False means no provider was registered in this deployment, so enrichment can
+            # only ever record UNAVAILABLE and every assessment stays fully deterministic.
+            "provider_registered": settings.AI_PROVIDER in AIProviderFactory._providers,
+        },
+    }
