@@ -38,4 +38,21 @@ class Settings(BaseSettings):
     # Bounded on purpose: one attempt, no backoff loop, no retry storm after a 429.
     AI_MAX_ATTEMPTS: int = 1
 
+    # --- Demo authentication ----------------------------------------------------
+    # Accepts ANY email with ANY password, auto-provisioning the caller into the demo
+    # organization. It exists so a demo is never blocked by a forgotten credential, and
+    # it is an authentication bypass -- so it is off by default and double-gated below.
+    DEMO_AUTH_ALLOW_ANY: bool = False
+
+    @property
+    def demo_auth_active(self) -> bool:
+        """
+        Both the flag and a development APP_ENV are required.
+
+        The second condition is the one that matters: setting DEMO_AUTH_ALLOW_ANY=true in a
+        production environment does nothing, so the bypass cannot travel with a config file
+        into a deployment where it would be a vulnerability.
+        """
+        return self.DEMO_AUTH_ALLOW_ANY and self.APP_ENV == "development"
+
 settings = Settings()
