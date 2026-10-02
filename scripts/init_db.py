@@ -34,6 +34,7 @@ from app.db.database import AsyncSessionLocal, engine
 # Importing the package registers every model with Base.metadata.
 import app.models  # noqa: F401
 from app.seeds.demo_data import seed_demo_data
+from app.seeds.demo_governance import seed_demo_governance
 
 
 async def _existing_schema(conn) -> Dict[str, set]:
@@ -127,6 +128,10 @@ async def main(seed: bool, check_only: bool) -> int:
         async with AsyncSessionLocal() as session:
             org = await seed_demo_data(session)
             print(f"seed: {org.name} ({org.id})")
+            # Separate session: the governance seed drives the real services, which commit
+            # their own units of work.
+        async with AsyncSessionLocal() as session:
+            await seed_demo_governance(session)
 
     await engine.dispose()
     return 0
