@@ -12,6 +12,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-secret-key-for-testing"
 os.environ["FRONTEND_ORIGIN"] = "http://localhost:3000"
 os.environ["AI_ENRICHMENT_ENABLED"] = "false"
+os.environ["DEMO_AUTH_ALLOW_ANY"] = "false"
 
 import uuid
 from datetime import datetime, timezone

@@ -31,6 +31,12 @@ async def test_default_configuration_leaves_the_bypass_off(demo_org):
     assert settings.demo_auth_active is False
 
 
+def test_test_environment_pins_bypass_off_in_os_environ():
+    """conftest must pin DEMO_AUTH_ALLOW_ANY=false so tests stay hermetic from local .env files."""
+    import os
+    assert os.environ.get("DEMO_AUTH_ALLOW_ANY") == "false"
+
+
 @pytest.mark.asyncio
 async def test_wrong_password_is_rejected_by_default(client, demo_org):
     response = await _login(client, "admin@asterion.com", "not-the-password")
