@@ -261,5 +261,70 @@ async def test_missing_url_fails_without_attempting_a_fetch(demo_org, monkeypatc
     assert called["count"] == 0
 
 
+async def test_one_bad_entry_among_good_ones_reports_partial(demo_org, tmp_path, monkeypatch):
+    """A persistence failure on one entry must not sink entries that already
+    succeeded, and must be reported as PARTIAL, not COMPLETED or FAILED."""
+    from app.db.database import AsyncSessionLocal
+
+    _patch_storage(monkeypatch, tmp_path)
+    monkeypatch.setattr(rss_ingestion, "fetch_feed", lambda url, **kwargs: _async_return(TWO_ENTRY_FEED))
+
+    real_upload = rss_ingestion.storage.upload_file
+
+    async def _fail_for_notice_b(file_data, file_name, content_type):
+        if "urn:b" in file_name:
+            raise OSError("simulated storage failure for this entry")
+        return await real_upload(file_data, file_name, content_type)
+
+    monkeypatch.setattr(rss_ingestion.storage, "upload_file", _fail_for_notice_b)
+
+    async with AsyncSessionLocal() as session:
+        source = await _source(session)
+        status, error, counters = await rss_ingestion.run_rss_ingestion(
+            session, source=source, organization_id=demo_org.id
+        )
+
+    assert status == "PARTIAL"
+    assert error  # a summary of what failed, not None
+    assert counters["documents_discovered"] == 2
+    assert counters["documents_processed"] == 1  # Notice A only
+    assert counters["documents_failed"] == 1  # Notice B
+
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy.future import select
+
+        docs = (
+            await session.execute(
+                select(RegulatoryDocument).where(RegulatoryDocument.organization_id == demo_org.id)
+            )
+        ).scalars().all()
+        assert len(docs) == 1
+        assert docs[0].title == "Notice A"
+
+
+async def test_every_entry_failing_reports_failed_not_partial(demo_org, tmp_path, monkeypatch):
+    """When nothing succeeds, the result is FAILED, not PARTIAL -- PARTIAL implies
+    at least one entry actually made it through."""
+    from app.db.database import AsyncSessionLocal
+
+    _patch_storage(monkeypatch, tmp_path)
+    monkeypatch.setattr(rss_ingestion, "fetch_feed", lambda url, **kwargs: _async_return(TWO_ENTRY_FEED))
+
+    async def _always_fail(file_data, file_name, content_type):
+        raise OSError("simulated total storage failure")
+
+    monkeypatch.setattr(rss_ingestion.storage, "upload_file", _always_fail)
+
+    async with AsyncSessionLocal() as session:
+        source = await _source(session)
+        status, error, counters = await rss_ingestion.run_rss_ingestion(
+            session, source=source, organization_id=demo_org.id
+        )
+
+    assert status == "FAILED"
+    assert counters["documents_processed"] == 0
+    assert counters["documents_failed"] == 2
+
+
 async def _async_return(value):
     return value
