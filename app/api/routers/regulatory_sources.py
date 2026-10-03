@@ -43,7 +43,16 @@ async def create_source(
     # id is a String(36) primary key with no column default, so an omitted id inserts
     # NULL and the insert fails -- the same bug class already fixed for documents
     # (f4b6853) and regulatory authorities (this session).
-    source = RegulatorySource(id=str(uuid.uuid4()), **source_in.dict())
+    #
+    # source_in.url is a pydantic HttpUrl, not a str, and the url column is a plain
+    # String(1000); passing the HttpUrl object straight through makes the insert fail
+    # at the driver level ("type 'HttpUrl' is not supported" on SQLite; untested but
+    # not guaranteed safe on every backend either) -- so every source create with a url
+    # was broken. Stringify explicitly.
+    source_data = source_in.dict()
+    if source_data.get("url") is not None:
+        source_data["url"] = str(source_data["url"])
+    source = RegulatorySource(id=str(uuid.uuid4()), **source_data)
     db.add(source)
     await db.commit()
     await db.refresh(source)
@@ -91,6 +100,8 @@ async def update_source(
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
     update_data = source_in.dict(exclude_unset=True)
+    if update_data.get("url") is not None:
+        update_data["url"] = str(update_data["url"])  # see create_source for why
     for field, value in update_data.items():
         setattr(source, field, value)
     await db.commit()
