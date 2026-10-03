@@ -110,6 +110,124 @@ async def test_update_source_with_a_url_does_not_raise_a_binding_error(client, a
     assert response.json()["url"] == "https://example.com/updated-feed.xml"
 
 
+async def test_create_source_without_a_url_succeeds_with_url_null(client, auth_headers):
+    """url is Optional[HttpUrl] -- a DOCUMENT/manual source legitimately has none."""
+    authority_id = await _authority_payload(client, auth_headers)
+
+    response = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source Without URL",
+            "source_type": "DOCUMENT",
+            "connector_type": "DOCUMENT",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["url"] is None
+
+
+async def test_create_source_rejects_an_invalid_url(client, auth_headers):
+    """Validation must still reject a malformed URL -- the fix stringifies an already-
+    validated HttpUrl for the ORM, it does not relax validation to accept anything."""
+    authority_id = await _authority_payload(client, auth_headers)
+
+    response = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source With Bad URL",
+            "source_type": "RSS",
+            "connector_type": "RSS",
+            "url": "not a valid url",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_update_source_rejects_an_invalid_url(client, auth_headers):
+    authority_id = await _authority_payload(client, auth_headers)
+    created = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source To Bad-Update",
+            "source_type": "RSS",
+            "connector_type": "RSS",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+
+    response = await client.patch(
+        f"/api/v1/regulatory/sources/{created.json()['id']}",
+        json={"url": "ht!tp://not-a-url"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_update_source_can_clear_a_url_back_to_null(client, auth_headers):
+    authority_id = await _authority_payload(client, auth_headers)
+    created = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source To Clear",
+            "source_type": "RSS",
+            "connector_type": "RSS",
+            "url": "https://example.com/feed.xml",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+
+    response = await client.patch(
+        f"/api/v1/regulatory/sources/{created.json()['id']}",
+        json={"url": ""},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["url"] is None
+
+
+async def test_persisted_url_round_trips_correctly_on_a_fresh_get(client, auth_headers):
+    """Not just the create/update response -- a separate GET (a genuinely fresh read
+    from the database, not an in-memory ORM object) must also serialize the stored
+    url as a plain string, confirming it was actually persisted as one."""
+    authority_id = await _authority_payload(client, auth_headers)
+    created = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source To Reread",
+            "source_type": "RSS",
+            "connector_type": "RSS",
+            "url": "https://example.com/reread-feed.xml",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+
+    fetched = await client.get(
+        f"/api/v1/regulatory/sources/{created.json()['id']}", headers=auth_headers
+    )
+
+    assert fetched.status_code == 200
+    assert fetched.json()["url"] == "https://example.com/reread-feed.xml"
+
+
 async def test_create_source_404s_for_an_unknown_authority(client, auth_headers):
     """The RegulatoryAuthority lookup this endpoint performs must still correctly
     reject an unknown authority_id now that the import is fixed."""
