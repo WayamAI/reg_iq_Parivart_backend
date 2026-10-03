@@ -106,7 +106,10 @@ async def role_headers(client, role: str, organization_id: str | None = None) ->
         json={
             "user_in": {
                 "name": f"{role} Test User",
-                "email": f"{role.lower()}-{suffix}@test.invalid",
+                # email-validator rejects reserved/special-use TLDs like .invalid; a
+                # unique local part under a real-shaped domain satisfies validation
+                # without this ever being a deliverable address.
+                "email": f"{role.lower()}-{suffix}@example.com",
                 "password": "testpassword123",
                 "role": role,
             },
@@ -121,7 +124,7 @@ async def role_headers(client, role: str, organization_id: str | None = None) ->
     login = await client.post(
         "/api/v1/auth/login",
         data={
-            "username": f"{role.lower()}-{suffix}@test.invalid",
+            "username": f"{role.lower()}-{suffix}@example.com",
             "password": "testpassword123",
         },
     )
