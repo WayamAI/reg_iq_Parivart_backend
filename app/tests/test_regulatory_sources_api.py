@@ -9,10 +9,12 @@ while documenting ingestion-run status (docs/ingestion/INGESTION_RUN_STATUS.md).
    transitions it. The frontend's own TERMINAL_INGESTION_STATES (src/services/api/
    types.ts in the sibling frontend repo) treats QUEUED as non-terminal and polls
    waiting for it to settle -- a run that can never leave QUEUED silently looks
-   identical to one still legitimately in progress. Since no source adapter exists
-   (confirmed: no RSS/HTML/API adapter code anywhere in app/), the run is now marked
-   FAILED immediately with an explicit reason -- an existing terminal state on both
-   sides, no API contract or response-shape change.
+   identical to one still legitimately in progress. For a source_type with no adapter,
+   the run is now marked FAILED immediately with an explicit reason -- an existing
+   terminal state on both sides, no API contract or response-shape change. These tests
+   use source_type=HTML specifically to exercise that still-unimplemented path; RSS now
+   has a real adapter (app/ingestion/rss_ingestion.py) and is covered separately in
+   test_rss_source_run_api.py.
 """
 
 import uuid
@@ -79,7 +81,7 @@ async def test_create_source_404s_for_an_unknown_authority(client, auth_headers)
     assert "not found" in response.text.lower()
 
 
-async def _created_source(client, auth_headers, source_type="RSS", connector_type="RSS") -> dict:
+async def _created_source(client, auth_headers, source_type="HTML", connector_type="HTML") -> dict:
     authority_id = await _authority_payload(client, auth_headers)
     response = await client.post(
         "/api/v1/regulatory/sources/",
@@ -107,7 +109,7 @@ async def test_run_source_reports_failed_not_an_eternal_queued(client, auth_head
     run = response.json()
     assert run["status"] == IngestionStatus.FAILED.value
     assert run["error"]
-    assert "RSS" in run["error"]
+    assert "HTML" in run["error"]
     assert run["completed_at"] is not None
 
 
