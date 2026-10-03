@@ -27,7 +27,26 @@ async def test_status_reports_app_and_dependency_health(client):
         "provider": settings.AI_PROVIDER,
         "model": settings.AI_MODEL,
         "provider_registered": False,
+        "provider_status": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_status_reports_provider_health_status_when_registered(client, monkeypatch):
+    """When a provider is registered under settings.AI_PROVIDER, /status surfaces its
+    credential-free health_status() -- and nothing else leaks."""
+    from app.ai.base import AIProviderFactory
+    from app.ai.providers.ollama_cloud_provider import OllamaCloudProvider
+
+    provider = OllamaCloudProvider(api_key="super-secret-value", model="gpt-oss:20b")
+    monkeypatch.setitem(AIProviderFactory._providers, settings.AI_PROVIDER, provider)
+
+    response = await client.get("/status")
+
+    body = response.json()
+    assert body["ai"]["provider_registered"] is True
+    assert body["ai"]["provider_status"]["model"] == "gpt-oss:20b"
+    assert "super-secret-value" not in response.text
 
 
 @pytest.mark.asyncio
