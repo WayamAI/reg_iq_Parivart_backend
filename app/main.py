@@ -146,6 +146,8 @@ async def status_check(db: AsyncSession = Depends(get_db)):
         logger.warning("status_database_check_failed", error=str(exc))
         database = {"status": "down", "error": str(exc)}
 
+    configured_provider = AIProviderFactory._providers.get(settings.AI_PROVIDER)
+
     return {
         "app": app.title,
         "version": app.version,
@@ -157,6 +159,13 @@ async def status_check(db: AsyncSession = Depends(get_db)):
             "model": settings.AI_MODEL,
             # False means no provider was registered in this deployment, so enrichment can
             # only ever record UNAVAILABLE and every assessment stays fully deterministic.
-            "provider_registered": settings.AI_PROVIDER in AIProviderFactory._providers,
+            "provider_registered": configured_provider is not None,
+            # health_status() is a provider-defined, credential-free status (see
+            # AIProvider.health_status): at most provider/model/base_url and whether a
+            # credential is configured, never the credential's value. None when no
+            # provider is registered for settings.AI_PROVIDER.
+            "provider_status": (
+                configured_provider.health_status() if configured_provider else None
+            ),
         },
     }
