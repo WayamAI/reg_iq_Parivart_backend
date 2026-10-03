@@ -90,6 +90,45 @@ async def auth_headers(client, demo_org):
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
 
+async def role_headers(client, role: str, organization_id: str | None = None) -> dict:
+    """
+    Register a fresh user with the given role (in their own new organization, via the
+    public /auth/register endpoint) and return their auth header.
+
+    Used for authorization tests: the user is intentionally NOT in the demo
+    organization, so a test exercising a cross-tenant-denied case can use this directly,
+    and a same-tenant role-denied case should instead use a role-only check (the
+    permission dependency, not tenant scoping, is what's under test there).
+    """
+    suffix = uuid.uuid4().hex[:8]
+    register = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "user_in": {
+                "name": f"{role} Test User",
+                "email": f"{role.lower()}-{suffix}@test.invalid",
+                "password": "testpassword123",
+                "role": role,
+            },
+            "org_in": {
+                "name": f"Role Test Org {suffix}",
+                "slug": f"role-test-org-{suffix}",
+            },
+        },
+    )
+    assert register.status_code == 201, register.text
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": f"{role.lower()}-{suffix}@test.invalid",
+            "password": "testpassword123",
+        },
+    )
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
 async def create_authority(
     session, short_name: str, jurisdiction: str, country: str, name: str = None
 ) -> RegulatoryAuthority:
