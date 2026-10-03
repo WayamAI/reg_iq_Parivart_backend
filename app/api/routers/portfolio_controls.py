@@ -13,6 +13,7 @@ from app.api.schemas.portfolio import (
     ControlResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.models.user import User
 
 router = APIRouter(prefix="/controls", tags=["Portfolio - Controls"])
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/controls", tags=["Portfolio - Controls"])
 async def create_control(
     control_in: ControlCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     control = Control(
         id=str(uuid.uuid4()),
@@ -73,7 +74,7 @@ async def update_control(
     control_id: str,
     control_in: ControlUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Control).where(
@@ -97,7 +98,7 @@ async def update_control(
 async def delete_control(
     control_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Control).where(
