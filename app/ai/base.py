@@ -79,6 +79,26 @@ class AIProvider(ABC):
         """Return the model name being used."""
         pass
 
+    async def aclose(self) -> None:
+        """
+        Release any held resources (e.g. a pooled HTTP client).
+
+        Default no-op so existing providers that hold nothing closeable remain valid
+        without change. A provider that owns a client should override this.
+        """
+        return None
+
+    def health_status(self) -> Dict[str, Any]:
+        """
+        Non-secret status info suitable for an operator-facing endpoint (e.g. /status).
+
+        Must never include an API key, token, or other credential. Default implementation
+        exposes only the provider and model name; a provider with more to report (e.g.
+        whether its credential is configured, without revealing it) should override this.
+        """
+        return {"provider": self.provider_name, "model": self.model_name}
+
+
 class AIProviderFactory:
     """Factory for creating AI provider instances."""
 
