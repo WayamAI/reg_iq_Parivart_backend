@@ -1,8 +1,8 @@
 import json
 import httpx
-from typing import Optional, Type
+from typing import Any, Optional
 from pydantic import BaseModel
-from app.ai.base import AIProvider
+from app.ai.base import AIProvider, parse_structured_output, structured_output_schema
 import structlog
 
 logger = structlog.get_logger()
@@ -24,15 +24,16 @@ class OllamaProvider(AIProvider):
     async def generate_structured_output(
         self,
         prompt: str,
-        response_model: Type[BaseModel],
+        response_model: Any,
         system_prompt: Optional[str] = None,
         temperature: float = 0.1,
         max_retries: int = 3,
-    ) -> BaseModel:
+    ) -> Any:
         """Generate structured output using Ollama with JSON schema."""
 
-        # Get JSON schema from the Pydantic model
-        schema = response_model.model_json_schema()
+        # Get JSON schema for the target type (a BaseModel subclass or a generic type
+        # such as list[SomeModel]; see app.ai.base.structured_output_schema).
+        schema = structured_output_schema(response_model)
 
         # Construct the system prompt with JSON schema instructions
         json_instructions = f"""
@@ -74,9 +75,9 @@ Do not include any explanation, markdown, or text outside the JSON object.
                     last_error = e
                     continue
 
-                # Validate against the Pydantic model
+                # Validate against the target type.
                 try:
-                    return response_model(**data)
+                    return parse_structured_output(response_model, data)
                 except Exception as e:
                     logger.warning("ollama_validation_failed", attempt=attempt + 1, error=str(e))
                     last_error = e
