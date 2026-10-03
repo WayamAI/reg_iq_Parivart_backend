@@ -117,20 +117,34 @@ async def run_source(
     if not source.enabled:
         raise HTTPException(status_code=400, detail="Source is disabled")
 
-    # Create an ingestion run record
+    # Create an ingestion run record.
+    #
+    # No source adapter (RSS/HTML/API) is implemented yet -- see
+    # docs/ingestion/INGESTION_RUN_STATUS.md for the full status and follow-up plan.
+    # The run is therefore marked FAILED immediately, with an explicit reason, rather
+    # than left at QUEUED: the frontend's own TERMINAL_INGESTION_STATES
+    # (src/services/api/types.ts in the frontend repo) already treats QUEUED as
+    # non-terminal and polls GET /sources/{id}/runs waiting for it to settle. A run
+    # that can never leave QUEUED is indistinguishable, from the frontend's point of
+    # view, from one still legitimately in progress -- it would poll up to its
+    # MAX_POLLS limit and then simply stop, leaving the UI showing "queued" forever.
+    # FAILED is an existing, already-handled terminal state on both sides: no API
+    # contract or response-shape change, and the UI already renders it distinctly
+    # (critical/red) and stops polling immediately instead of after MAX_POLLS.
     run_id = str(uuid.uuid4())
     run = IngestionRun(
         id=run_id,
         source_id=source_id,
-        status=IngestionStatus.QUEUED
+        status=IngestionStatus.FAILED,
+        completed_at=datetime.utcnow(),
+        error=(
+            f"No ingestion adapter is implemented for source_type={source.source_type.value}. "
+            "This source's run was recorded but could not be executed."
+        ),
     )
     db.add(run)
     await db.commit()
     await db.refresh(run)
-
-    # In the future, we would add a background task to process the source
-    # For now, we just return the run and the client can poll for status
-    # background_tasks.add_task(process_source_run, run_id, source_id, db)
 
     return run
 
