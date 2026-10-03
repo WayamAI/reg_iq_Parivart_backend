@@ -17,6 +17,7 @@ from app.api.schemas.regulatory import (
     IngestionRunResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 
 router = APIRouter(prefix="/sources", tags=["Regulatory Sources"])
 
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/sources", tags=["Regulatory Sources"])
 async def create_source(
     source_in: SourceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     # Verify the authority exists
     result = await db.execute(select(RegulatoryAuthority).where(RegulatoryAuthority.id == source_in.authority_id))
@@ -76,7 +77,7 @@ async def update_source(
     source_id: str,
     source_in: SourceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatorySource).where(RegulatorySource.id == source_id))
     source = result.scalars().first()
@@ -93,7 +94,7 @@ async def update_source(
 async def delete_source(
     source_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatorySource).where(RegulatorySource.id == source_id))
     source = result.scalars().first()
@@ -108,7 +109,7 @@ async def run_source(
     source_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatorySource).where(RegulatorySource.id == source_id))
     source = result.scalars().first()
