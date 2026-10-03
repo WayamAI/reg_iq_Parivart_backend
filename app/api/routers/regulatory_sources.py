@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 
 from app.db.database import get_db
+from app.ingestion.api_adapter import run_api_ingestion
 from app.ingestion.html_adapter import run_html_ingestion
 from app.ingestion.rss_ingestion import run_rss_ingestion
 from app.models.regulatory import (
@@ -145,6 +146,8 @@ async def run_source(
     adapters = {
         SourceType.RSS: run_rss_ingestion,
         SourceType.HTML: run_html_ingestion,
+        SourceType.API: run_api_ingestion,
+        SourceType.WEB_SERVICE: run_api_ingestion,
     }
     adapter = adapters.get(source.source_type)
 
