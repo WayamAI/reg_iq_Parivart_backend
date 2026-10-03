@@ -62,6 +62,54 @@ async def test_create_source_does_not_raise_nameerror(client, auth_headers):
     assert body["name"] == "Test RSS Source"
 
 
+async def test_create_source_with_a_url_does_not_raise_a_binding_error(client, auth_headers):
+    """Regression test: source_in.url is a pydantic HttpUrl, not a str, and passing it
+    straight through to the ORM failed at the driver level ("type 'HttpUrl' is not
+    supported")."""
+    authority_id = await _authority_payload(client, auth_headers)
+
+    response = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source With URL",
+            "source_type": "RSS",
+            "connector_type": "RSS",
+            "url": "https://example.com/feed.xml",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["url"] == "https://example.com/feed.xml"
+
+
+async def test_update_source_with_a_url_does_not_raise_a_binding_error(client, auth_headers):
+    authority_id = await _authority_payload(client, auth_headers)
+    created = await client.post(
+        "/api/v1/regulatory/sources/",
+        json={
+            "authority_id": authority_id,
+            "name": "Source To Update",
+            "source_type": "RSS",
+            "connector_type": "RSS",
+            "enabled": True,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+
+    response = await client.patch(
+        f"/api/v1/regulatory/sources/{created.json()['id']}",
+        json={"url": "https://example.com/updated-feed.xml"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["url"] == "https://example.com/updated-feed.xml"
+
+
 async def test_create_source_404s_for_an_unknown_authority(client, auth_headers):
     """The RegulatoryAuthority lookup this endpoint performs must still correctly
     reject an unknown authority_id now that the import is fixed."""
