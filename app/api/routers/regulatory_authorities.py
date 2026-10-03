@@ -14,6 +14,7 @@ from app.api.schemas.regulatory import (
     AuthorityResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 
 router = APIRouter(prefix="/authorities", tags=["Regulatory Authorities"])
 
@@ -21,11 +22,10 @@ router = APIRouter(prefix="/authorities", tags=["Regulatory Authorities"])
 async def create_authority(
     authority_in: AuthorityCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
-    # Ensure the user has permission (ADMIN or REGULATORY_MANAGER)
-    # For now we allow any authenticated user, but we can add role checks later
-    # (see docs/security/AUTHORIZATION_GAPS.md).
+    # Role-gated: ADMIN/REGULATORY_MANAGER/COMPLIANCE_MANAGER only -- see
+    # docs/security/AUTHORIZATION_MATRIX_PROPOSAL.md.
     #
     # id is a String(36) primary key with no column default (see app/db/base.py: Base
     # is a plain declarative_base with no id mixin), so an omitted id inserts NULL and
@@ -65,7 +65,7 @@ async def update_authority(
     authority_id: str,
     authority_in: AuthorityUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatoryAuthority).where(RegulatoryAuthority.id == authority_id))
     authority = result.scalars().first()
@@ -82,7 +82,7 @@ async def update_authority(
 async def delete_authority(
     authority_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatoryAuthority).where(RegulatoryAuthority.id == authority_id))
     authority = result.scalars().first()
