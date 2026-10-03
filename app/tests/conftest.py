@@ -90,6 +90,42 @@ async def auth_headers(client, demo_org):
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
 
+async def teammate_headers(client, organization_id: str, role: str) -> dict:
+    """
+    Insert a user with the given role directly into an EXISTING organization, and
+    return their auth header.
+
+    For positive-path authorization tests ("this role CAN do X"): role_headers()
+    creates a user in a brand-new organization, so a request against a resource owned
+    by a different org (e.g. the seeded demo org) would be denied by tenant scoping
+    regardless of role, which would make a false negative look like a role failure.
+    This inserts the user directly (register() cannot add a member to an existing org;
+    it always creates one), using the same hash_password the app itself uses so login
+    works exactly like a normal user's would.
+    """
+    from app.core.security import hash_password
+
+    user = User(
+        id=str(uuid.uuid4()),
+        organization_id=organization_id,
+        name=f"{role} Teammate",
+        email=f"{role.lower()}-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash=hash_password("testpassword123"),
+        role=role,
+        is_active=True,
+    )
+    async with AsyncSessionLocal() as session:
+        session.add(user)
+        await session.commit()
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": user.email, "password": "testpassword123"},
+    )
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
 async def role_headers(client, role: str, organization_id: str | None = None) -> dict:
     """
     Register a fresh user with the given role (in their own new organization, via the
