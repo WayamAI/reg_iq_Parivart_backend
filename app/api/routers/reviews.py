@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_approve
 from app.api.schemas.review import ReviewCreate, ReviewResponse
 from app.db.database import get_db
 from app.models.user import User
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/reviews", tags=["Human Review"])
 async def create_review(
     payload: ReviewCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_approve),
 ):
     """
     File a review decision against an impact assessment.

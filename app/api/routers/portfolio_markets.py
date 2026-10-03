@@ -13,6 +13,7 @@ from app.api.schemas.portfolio import (
     MarketResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.models.user import User
 
 router = APIRouter(prefix="/markets", tags=["Portfolio - Markets"])
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/markets", tags=["Portfolio - Markets"])
 async def create_market(
     market_in: MarketCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     market = Market(
         id=str(uuid.uuid4()),
@@ -70,7 +71,7 @@ async def update_market(
     market_id: str,
     market_in: MarketUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Market).where(
@@ -94,7 +95,7 @@ async def update_market(
 async def delete_market(
     market_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Market).where(

@@ -90,6 +90,84 @@ async def auth_headers(client, demo_org):
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
 
+async def teammate_headers(client, organization_id: str, role: str) -> dict:
+    """
+    Insert a user with the given role directly into an EXISTING organization, and
+    return their auth header.
+
+    For positive-path authorization tests ("this role CAN do X"): role_headers()
+    creates a user in a brand-new organization, so a request against a resource owned
+    by a different org (e.g. the seeded demo org) would be denied by tenant scoping
+    regardless of role, which would make a false negative look like a role failure.
+    This inserts the user directly (register() cannot add a member to an existing org;
+    it always creates one), using the same hash_password the app itself uses so login
+    works exactly like a normal user's would.
+    """
+    from app.core.security import hash_password
+
+    user = User(
+        id=str(uuid.uuid4()),
+        organization_id=organization_id,
+        name=f"{role} Teammate",
+        email=f"{role.lower()}-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash=hash_password("testpassword123"),
+        role=role,
+        is_active=True,
+    )
+    async with AsyncSessionLocal() as session:
+        session.add(user)
+        await session.commit()
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={"username": user.email, "password": "testpassword123"},
+    )
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+async def role_headers(client, role: str, organization_id: str | None = None) -> dict:
+    """
+    Register a fresh user with the given role (in their own new organization, via the
+    public /auth/register endpoint) and return their auth header.
+
+    Used for authorization tests: the user is intentionally NOT in the demo
+    organization, so a test exercising a cross-tenant-denied case can use this directly,
+    and a same-tenant role-denied case should instead use a role-only check (the
+    permission dependency, not tenant scoping, is what's under test there).
+    """
+    suffix = uuid.uuid4().hex[:8]
+    register = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "user_in": {
+                "name": f"{role} Test User",
+                # email-validator rejects reserved/special-use TLDs like .invalid; a
+                # unique local part under a real-shaped domain satisfies validation
+                # without this ever being a deliverable address.
+                "email": f"{role.lower()}-{suffix}@example.com",
+                "password": "testpassword123",
+                "role": role,
+            },
+            "org_in": {
+                "name": f"Role Test Org {suffix}",
+                "slug": f"role-test-org-{suffix}",
+            },
+        },
+    )
+    assert register.status_code == 201, register.text
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        data={
+            "username": f"{role.lower()}-{suffix}@example.com",
+            "password": "testpassword123",
+        },
+    )
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
 async def create_authority(
     session, short_name: str, jurisdiction: str, country: str, name: str = None
 ) -> RegulatoryAuthority:

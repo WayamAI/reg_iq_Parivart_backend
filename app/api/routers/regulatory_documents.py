@@ -6,6 +6,7 @@ from app.services.document_service import upload_and_create_document
 from app.services.document_processing import process_document_background
 from app.api.schemas.document import DocumentUploadResponse, DocumentResponse
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.models.user import User
 from app.models import RegulatoryDocument
 from typing import Optional
@@ -25,7 +26,7 @@ async def upload_document(
     authority_id: str = Form(...),
     source_id: str = Form(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     # Validate that the authority and source exist (optional, but good practice)
     # For now, we assume they are valid; we can add checks later.
@@ -71,7 +72,7 @@ async def trigger_document_processing(
     document_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     # Verify the document exists and belongs to the user's organization
     result = await db.execute(

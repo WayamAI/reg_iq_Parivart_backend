@@ -13,6 +13,7 @@ from app.api.schemas.portfolio import (
     ProductResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.models.user import User
 
 router = APIRouter(prefix="/products", tags=["Portfolio - Products"])
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/products", tags=["Portfolio - Products"])
 async def create_product(
     product_in: ProductCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     # Ensure the product_code is unique within the organization
     result = await db.execute(
@@ -83,7 +84,7 @@ async def update_product(
     product_id: str,
     product_in: ProductUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Product).where(
@@ -107,7 +108,7 @@ async def update_product(
 async def delete_product(
     product_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Product).where(

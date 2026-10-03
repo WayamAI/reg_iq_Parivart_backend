@@ -7,7 +7,14 @@ import uuid
 from datetime import datetime
 
 from app.db.database import get_db
-from app.models.regulatory import RegulatorySource, IngestionRun, IngestionStatus
+from app.ingestion.rss_ingestion import run_rss_ingestion
+from app.models.regulatory import (
+    RegulatoryAuthority,
+    RegulatorySource,
+    IngestionRun,
+    IngestionStatus,
+    SourceType,
+)
 from app.models.document import RegulatoryDocument
 from app.api.schemas.regulatory import (
     SourceCreate,
@@ -17,6 +24,7 @@ from app.api.schemas.regulatory import (
     IngestionRunResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 
 router = APIRouter(prefix="/sources", tags=["Regulatory Sources"])
 
@@ -24,7 +32,7 @@ router = APIRouter(prefix="/sources", tags=["Regulatory Sources"])
 async def create_source(
     source_in: SourceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     # Verify the authority exists
     result = await db.execute(select(RegulatoryAuthority).where(RegulatoryAuthority.id == source_in.authority_id))
@@ -32,7 +40,19 @@ async def create_source(
     if not authority:
         raise HTTPException(status_code=400, detail="Authority not found")
 
-    source = RegulatorySource(**source_in.dict())
+    # id is a String(36) primary key with no column default, so an omitted id inserts
+    # NULL and the insert fails -- the same bug class already fixed for documents
+    # (f4b6853) and regulatory authorities (this session).
+    #
+    # source_in.url is a pydantic HttpUrl, not a str, and the url column is a plain
+    # String(1000); passing the HttpUrl object straight through makes the insert fail
+    # at the driver level ("type 'HttpUrl' is not supported" on SQLite; untested but
+    # not guaranteed safe on every backend either) -- so every source create with a url
+    # was broken. Stringify explicitly.
+    source_data = source_in.dict()
+    if source_data.get("url") is not None:
+        source_data["url"] = str(source_data["url"])
+    source = RegulatorySource(id=str(uuid.uuid4()), **source_data)
     db.add(source)
     await db.commit()
     await db.refresh(source)
@@ -73,13 +93,15 @@ async def update_source(
     source_id: str,
     source_in: SourceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatorySource).where(RegulatorySource.id == source_id))
     source = result.scalars().first()
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
     update_data = source_in.dict(exclude_unset=True)
+    if update_data.get("url") is not None:
+        update_data["url"] = str(update_data["url"])  # see create_source for why
     for field, value in update_data.items():
         setattr(source, field, value)
     await db.commit()
@@ -90,7 +112,7 @@ async def update_source(
 async def delete_source(
     source_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatorySource).where(RegulatorySource.id == source_id))
     source = result.scalars().first()
@@ -105,7 +127,7 @@ async def run_source(
     source_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_configure)
 ):
     result = await db.execute(select(RegulatorySource).where(RegulatorySource.id == source_id))
     source = result.scalars().first()
@@ -114,20 +136,58 @@ async def run_source(
     if not source.enabled:
         raise HTTPException(status_code=400, detail="Source is disabled")
 
-    # Create an ingestion run record
     run_id = str(uuid.uuid4())
-    run = IngestionRun(
-        id=run_id,
-        source_id=source_id,
-        status=IngestionStatus.QUEUED
-    )
+
+    if source.source_type == SourceType.RSS:
+        # The one real adapter implemented so far -- see app/ingestion/rss_ingestion.py
+        # and docs/ingestion/INGESTION_RUN_STATUS.md. Run synchronously within the
+        # request (bounded by MAX_ENTRIES_PER_RUN and the fetcher's own timeouts) so the
+        # response already carries the real outcome, rather than the client needing to
+        # poll a background task for a small, bounded piece of work.
+        ingestion_status, error, counters = await run_rss_ingestion(
+            db,
+            source=source,
+            organization_id=current_user.organization_id,
+            actor_id=current_user.id,
+        )
+        run = IngestionRun(
+            id=run_id,
+            source_id=source_id,
+            status=IngestionStatus[ingestion_status],
+            completed_at=datetime.utcnow(),
+            error=error,
+            **counters,
+        )
+        source.last_run_at = datetime.utcnow()
+        if ingestion_status in ("COMPLETED", "PARTIAL"):
+            source.last_success_at = datetime.utcnow()
+        if error:
+            source.last_error = error
+    else:
+        # No adapter implemented for this source_type yet -- see
+        # docs/ingestion/INGESTION_RUN_STATUS.md. The run is marked FAILED
+        # immediately, with an explicit reason, rather than left at QUEUED: the
+        # frontend's own TERMINAL_INGESTION_STATES (src/services/api/types.ts in the
+        # frontend repo) already treats QUEUED as non-terminal and polls
+        # GET /sources/{id}/runs waiting for it to settle. A run that can never leave
+        # QUEUED is indistinguishable, from the frontend's point of view, from one
+        # still legitimately in progress.
+        run = IngestionRun(
+            id=run_id,
+            source_id=source_id,
+            status=IngestionStatus.FAILED,
+            completed_at=datetime.utcnow(),
+            error=(
+                f"No ingestion adapter is implemented for source_type={source.source_type.value}. "
+                "This source's run was recorded but could not be executed."
+            ),
+        )
+        source.last_run_at = datetime.utcnow()
+        source.last_error = run.error
+
     db.add(run)
     await db.commit()
     await db.refresh(run)
-
-    # In the future, we would add a background task to process the source
-    # For now, we just return the run and the client can poll for status
-    # background_tasks.add_task(process_source_run, run_id, source_id, db)
 
     return run
 

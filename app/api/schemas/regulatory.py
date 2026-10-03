@@ -71,6 +71,18 @@ class SourceUpdate(BaseModel):
     enabled: Optional[bool] = None
     schedule: Optional[str] = None
 
+    # SourceBase carries this same validator for create; SourceUpdate is a separate
+    # BaseModel (not a SourceBase subclass) and had not inherited it, so PATCHing
+    # url="" to clear a source's URL raised a 422 ("input is empty") instead of
+    # clearing it to NULL -- inconsistent with create's documented empty-string
+    # handling for the identical column/field.
+    @field_validator("url", mode="before")
+    @classmethod
+    def _empty_url_is_absent(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
 class SourceResponse(SourceBase):
     id: str
     last_run_at: Optional[datetime] = None

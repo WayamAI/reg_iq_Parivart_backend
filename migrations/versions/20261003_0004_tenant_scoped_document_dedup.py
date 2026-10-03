@@ -73,6 +73,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # No pre-check here, deliberately: if any (organization_id, sha256) pair now has more
+    # than one row -- the exact, expected outcome of this migration doing its job -- the
+    # database itself refuses to recreate the old global-unique index
+    # (UniqueViolationError on CREATE UNIQUE INDEX) and the whole downgrade transaction
+    # rolls back. Verified directly against a real PostgreSQL 14 instance: inserting two
+    # organizations' documents with the same sha256, then downgrading, fails loudly with
+    # that exact error and leaves the schema at 0004 -- it never silently deletes or
+    # reassigns a row to force the old constraint through.
     op.drop_constraint(
         'uq_regulatory_documents_org_sha256', 'regulatory_documents', type_='unique'
     )
