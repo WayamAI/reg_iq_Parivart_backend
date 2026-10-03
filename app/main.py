@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.base import AIProviderFactory
+from app.ai.startup import register_configured_providers, shutdown_registered_providers
 from app.api.routers import (
     auth,
     authorities_router,
@@ -68,6 +69,25 @@ app.add_middleware(
 
 # Give deliberate HTTP errors (401/403/404/409/422/...) the same envelope and request id.
 register_exception_handlers(app)
+
+
+@app.on_event("startup")
+async def _register_ai_providers() -> None:
+    """
+    Populate AIProviderFactory from current configuration.
+
+    Without this, nothing ever called register_provider outside tests, so the registry
+    was empty in every real run and AI_PROVIDER could never resolve -- see
+    app/ai/startup.py for exactly which providers are registered and under what
+    conditions. Never raises: a misconfigured or disabled provider is logged and
+    skipped, not a startup failure.
+    """
+    register_configured_providers()
+
+
+@app.on_event("shutdown")
+async def _shutdown_ai_providers() -> None:
+    await shutdown_registered_providers()
 
 # --- Routers ---------------------------------------------------------------------------
 app.include_router(auth.router, prefix="/api/v1")
