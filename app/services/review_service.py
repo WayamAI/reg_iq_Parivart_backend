@@ -20,6 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.governance import ImpactReview, ReviewDecision
 from app.models.impact import ImpactAssessment, ImpactAssessmentStatus
 from app.models.user import User
+from app.services.audit_service import (
+    ENTITY_IMPACT_ASSESSMENT,
+    EVENT_REVIEW_FILED,
+    AuditService,
+)
 
 # An assessment can only be reviewed once the engine has produced something to review.
 # PENDING and ANALYZING have no result yet; FAILED has no result at all.
@@ -109,6 +114,26 @@ class ReviewService:
         # The status move and the review row are one unit of work: an assessment must
         # never end up in a reviewed state with no review explaining why.
         assessment.status = new_status
+
+        # The audit event joins that same unit of work, for the same reason: the trail
+        # must not record a decision that the commit below then fails to make.
+        AuditService.record(
+            session,
+            organization_id=organization_id,
+            actor_id=reviewer_id,
+            event_type=EVENT_REVIEW_FILED,
+            entity_type=ENTITY_IMPACT_ASSESSMENT,
+            entity_id=impact_assessment_id,
+            payload={
+                "review_id": review.id,
+                "decision": decision.value,
+                "previous_state": previous_state,
+                "new_state": new_status.value,
+                # Whether a note was left, not the note itself: the note can be read
+                # from the review, and the trail should not duplicate free text.
+                "has_notes": notes is not None and notes.strip() != "",
+            },
+        )
 
         await session.commit()
         await session.refresh(review)

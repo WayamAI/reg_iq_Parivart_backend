@@ -121,8 +121,10 @@ environment before `app.core.config` is imported anywhere, and every AI provider
 5. [x] Portfolio & Matching Engine
 6. [x] Impact Assessment & Reports
 7. [x] Human Review & Actions
-8. [ ] Evidence & Audit Trail — the `evidence` and `audit_events` tables exist and are
-   migrated, but no service or endpoint writes to them yet.
+8. [x] Evidence & Audit Trail — evidence attached to actions (upload, list, read,
+   download) and a read-only audit trail, plus read-only regulatory changes and
+   obligations. No migration was needed: both tables were already in the Phase 6
+   baseline.
 
 ## Branches
-- `feature/az-ps-max-context-population` - Main development branch
+- `main` - Main development branch

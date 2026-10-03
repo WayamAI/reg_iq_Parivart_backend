@@ -1,7 +1,11 @@
+# `os` is imported here, at module scope, deliberately. It used to be imported inside
+# LocalStorage.__init__, which bound it as a local of that function only -- so every
+# other method's os.path.join raised NameError and the whole upload/download path was
+# dead.
 from abc import ABC, abstractmethod
 from typing import BinaryIO, Optional
+import os
 import uuid
-from datetime import datetime
 
 class StorageProvider(ABC):
     @abstractmethod
@@ -26,7 +30,6 @@ class StorageProvider(ABC):
 
 class LocalStorage(StorageProvider):
     def __init__(self, base_path: str = "./storage"):
-        import os
         self.base_path = base_path
         os.makedirs(self.base_path, exist_ok=True)
 

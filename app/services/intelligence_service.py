@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.models.intelligence import RegulatoryChange, RegulatoryObligation, ChangeType, ObligationCategory
@@ -6,6 +8,42 @@ from app.ai.schemas import DocumentAnalysisResult, ExtractedChange, ExtractedObl
 import structlog
 
 logger = structlog.get_logger()
+
+
+def _match_obligation_to_change(
+    obligation_data: ExtractedObligation, changes: list[RegulatoryChange]
+) -> str | None:
+    """
+    Deterministically match an extracted obligation to one of this document's extracted
+    changes, using only the data the extraction itself provided.
+
+    Unambiguous cases only:
+      - Exactly one change was extracted for the document -> that change caused it.
+      - The obligation's source_section matches exactly one change's section
+        (case-insensitive) -> that change caused it.
+
+    Anything else (no changes, no section given, or the section matches zero or more than
+    one change) returns None rather than guessing -- a fabricated link would misrepresent
+    provenance that the product's audit/evidence story depends on.
+    """
+    if not changes:
+        return None
+    if len(changes) == 1:
+        return changes[0].id
+
+    section = (obligation_data.source_section or "").strip().lower()
+    if not section:
+        return None
+
+    matches = [
+        change
+        for change in changes
+        if (change.section or "").strip().lower() == section
+    ]
+    if len(matches) == 1:
+        return matches[0].id
+    return None
+
 
 async def persist_intelligence(
     db: AsyncSession,
@@ -30,7 +68,7 @@ async def persist_intelligence(
             change_type_enum = ChangeType.OTHER
 
         change = RegulatoryChange(
-            id=str(__import__('uuid').uuid4()),
+            id=str(uuid.uuid4()),
             document_id=document_id,
             version_id=version_id,
             section=change_data.section,
@@ -55,8 +93,8 @@ async def persist_intelligence(
             obligation_category_enum = ObligationCategory.OTHER
 
         obligation = RegulatoryObligation(
-            id=str(__import__('uuid').uuid4()),
-            change_id=None,  # We don't have a change_id yet; we'll set it later if we want to link obligations to changes.
+            id=str(uuid.uuid4()),
+            change_id=_match_obligation_to_change(obligation_data, changes_created),
             document_id=document_id,
             text=obligation_data.text,
             category=obligation_category_enum,
@@ -82,15 +120,3 @@ async def persist_intelligence(
         await db.refresh(obligation)
 
     return changes_created, obligations_created
-
-async def link_obligations_to_changes(
-    db: AsyncSession,
-    document_id: str,
-) -> None:
-    """
-    After changes and obligations are created, we can try to link obligations to changes.
-    This is a simple heuristic: for each obligation, find a change in the same document that has overlapping text or proximity.
-    For now, we'll skip this and leave change_id as NULL. In a future implementation, we might do more sophisticated linking.
-    """
-    # For now, we do nothing.
-    pass

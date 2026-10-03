@@ -44,6 +44,7 @@ async def create_action(
             impact_item_id=payload.impact_item_id,
             priority=payload.priority,
             due_date=payload.due_date,
+            actor_id=current_user.id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -110,6 +111,7 @@ async def update_action(
             priority=payload.priority,
             due_date=payload.due_date,
             status=payload.status,
+            actor_id=current_user.id,
         )
     except InvalidStatusTransition as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -137,6 +139,7 @@ async def transition_action_status(
             organization_id=current_user.organization_id,
             action_id=action_id,
             new_status=payload.status,
+            actor_id=current_user.id,
         )
     except InvalidStatusTransition as exc:
         raise HTTPException(status_code=409, detail=str(exc))

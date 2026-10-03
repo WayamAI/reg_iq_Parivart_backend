@@ -153,6 +153,134 @@ CANCELLED    -> (terminal)
 
 `completed_at` is stamped on entry into `COMPLETED` and is null for every other status.
 
+### 9. Evidence (`/api/v1/evidence`)
+
+Files that substantiate an action.
+
+- `POST /api/v1/evidence/upload` — **`multipart/form-data`**: `file` (required),
+  `action_id` (required), `description` (optional). `201` with the created record.
+  The uploader and the tenant come from the access token, never the form.
+- `GET /api/v1/evidence/` — Query: `action_id`, `skip`, `limit`. Bare array, newest first.
+- `GET /api/v1/evidence/{id}`
+- `GET /api/v1/evidence/{id}/download` — streams the stored bytes as an attachment.
+
+Evidence attaches to an **action and nothing else**. The `evidence` table carries an
+`action_id` with no generic `entity_type`/`entity_id` pair, so evidence reaches the rest
+of the chain through the action it belongs to:
+
+```text
+evidence -> action -> impact item -> assessment -> regulatory change -> document
+```
+
+There is **no `evidence_type`** field or enum — no such column exists.
+
+`storage_key` is **never serialised**. It is an internal filesystem path; retrieval goes
+through the download endpoint, which resolves the key server-side after checking the
+tenant.
+
+Ownership of the action is checked **before the file is stored**, so a request naming
+another tenant's action writes nothing at all and returns `404`.
+
+Evidence is **not deduplicated by `sha256`**, unlike a regulatory document. The same file
+may legitimately substantiate two actions, and refusing the second would lose the fact
+that it was offered for both. The hash is an integrity anchor, not a uniqueness
+constraint.
+
+`GET /{id}/download` returns **`410`**, not `404`, when the row exists but its stored file
+does not. A `404` would claim the evidence was never filed, which is a different and more
+alarming statement than "the file is no longer available".
+
+### 10. Audit Trail (`/api/v1/audit`)
+
+- `GET /api/v1/audit/` — Query: `entity_type`, `entity_id`, `actor_id`, `event_type`,
+  `since`, `until`, `skip`, `limit`. Bare array, newest first.
+- `GET /api/v1/audit/{id}`
+- `GET /api/v1/audit/event-types` — the vocabulary this backend writes, so a client can
+  build a filter without hardcoding a list that would drift. It describes what *can* be
+  written, not what a given organization has.
+
+**Read-only. `POST`, `PATCH` and `DELETE` are `405`.** Audit events are written by the
+services as a side effect of a real change, never posted by a client: a trail a caller
+can write to proves nothing, and one a caller can edit is not a trail. The only way to
+add an event is to make the change it describes.
+
+`entity_type` + `entity_id` together answer "the history of this record", which is how a
+detail screen links to its own provenance.
+
+An event names its actor — `actor_id`, `actor_name`, `actor_email` — so a reader does not
+have to resolve a UUID to learn who acted. `actor_*` are null for an event with no
+attributable user.
+
+`payload` arrives as a **JSON object**, parsed from the JSON string held in the `Text`
+column. A historical row whose payload does not parse is reported as having none rather
+than raising, so one malformed detail cannot make the rest of the trail unreadable.
+
+`event_type` and `entity_type` are **plain strings, not enums**, matching their columns.
+Reading is deliberately tolerant: an event written by another revision still reads back
+and still renders. A client maps the values it knows to labels and falls back to the raw
+value.
+
+Event types currently written:
+
+```text
+USER_SIGNED_IN                    DOCUMENT_UPLOADED
+IMPACT_ASSESSMENT_CREATED         DOCUMENT_PROCESSED
+IMPACT_ASSESSMENT_REANALYZED      REPORT_GENERATED
+REVIEW_FILED                      ACTION_CREATED
+ACTION_UPDATED                    ACTION_STATUS_CHANGED
+EVIDENCE_ATTACHED
+```
+
+Entity types: `USER`, `REGULATORY_DOCUMENT`, `IMPACT_ASSESSMENT`, `IMPACT_REPORT`,
+`ACTION`.
+
+What is deliberately **not** recorded:
+
+- A **failed** sign-in. Failed attempts belong in the security log, not in a
+  tenant-readable trail, and recording them would mean writing rows on behalf of a caller
+  who never authenticated.
+- A **refused** change. An illegal action transition raises before anything is recorded
+  and nothing is committed, so the trail cannot claim a change the state machine rejected.
+- A **no-op**. Re-sending an action's current status is allowed and is not a change. A
+  duplicate document upload returns at the dedupe check, before any row is added. A
+  reused (idempotent) analysis ran no analysis.
+- **Free text and secrets.** A payload carries ids, enum values, changed field *names* and
+  before/after states. An action edit records which fields changed, not their values; a
+  review records *whether* a note was left, not the note. No token, credential, password
+  hash, file byte or document text is ever written to a payload.
+
+Every event is recorded **inside the transaction that makes the change it describes**, so
+a change and its event succeed or fail together.
+
+### 11. Regulatory Intelligence (`/api/v1/regulatory`)
+
+Read-only access to what the document-processing pipeline extracted.
+
+- `GET /api/v1/regulatory/changes/` — Query: `document_id`, `change_type`, `skip`, `limit`
+- `GET /api/v1/regulatory/changes/{id}`
+- `GET /api/v1/regulatory/changes/{id}/obligations`
+- `GET /api/v1/regulatory/obligations/` — Query: `regulatory_change_id`, `document_id`,
+  `category`, `skip`, `limit`
+- `GET /api/v1/regulatory/obligations/{id}`
+
+These close a real gap: an impact assessment carries a `regulatory_change_id` that
+previously no endpoint could resolve, so a client could show the id and the engine's
+summary but could not link through to the change or list the obligations behind a match.
+
+**Read-only, and `405` on writes.** These rows are what the pipeline extracted from a
+source document, not user-entered data. Hand-editing an extracted obligation would
+destroy the provenance that makes it worth anything.
+
+**Tenancy runs through the document.** Neither `regulatory_changes` nor
+`regulatory_obligations` has an `organization_id`; ownership is established by joining
+`regulatory_documents` and filtering on its `organization_id`.
+
+`GET /changes/{id}/obligations` for an unknown or cross-tenant change is a `404`, not an
+empty list — "this change has no obligations" and "you cannot see this change" are
+different answers and should not look alike.
+
+`confidence` is `Numeric(3,2)` in the database and is serialised as a JSON **number**.
+
 ---
 
 ## Organization Isolation

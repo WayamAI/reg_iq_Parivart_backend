@@ -20,6 +20,10 @@ from app.models.portfolio import (
 )
 from app.models.regulatory import RegulatoryAuthority, RegulatorySource, ConnectorType, SourceType, IngestionStatus
 
+# The demo organization every seeded entity and the demo login belong to.
+DEMO_ORG_SLUG = "asterion-medical-systems"
+
+
 async def _exists(db: AsyncSession, model, *conditions) -> bool:
     result = await db.execute(select(model.id).where(*conditions).limit(1))
     return result.scalars().first() is not None
@@ -34,13 +38,13 @@ async def seed_demo_data(db: AsyncSession):
     by hand (or where a previous seed failed part-way) could never be topped up and was
     left with an empty portfolio. Nothing here overwrites or deletes existing rows.
     """
-    result = await db.execute(select(Organization).where(Organization.slug == "asterion-medical-systems"))
+    result = await db.execute(select(Organization).where(Organization.slug == DEMO_ORG_SLUG))
     org = result.scalars().first()
     if org is None:
         org = Organization(
             id=str(uuid.uuid4()),
             name="Asterion Medical Systems",
-            slug="asterion-medical-systems",
+            slug=DEMO_ORG_SLUG,
             industry="Medical Devices",
             description="A leading medical device company focused on innovative monitoring and therapeutic solutions.",
         )

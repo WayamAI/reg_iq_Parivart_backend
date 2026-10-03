@@ -51,6 +51,7 @@ async def upload_document(
         jurisdiction=jurisdiction,
         country=country,
         source_url=source_url,
+        actor_id=current_user.id,
     )
 
     # If not a duplicate, schedule background processing
