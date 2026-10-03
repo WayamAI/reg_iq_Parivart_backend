@@ -14,6 +14,7 @@ from app.api.schemas.portfolio import (
     RegistrationResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.models.user import User
 
 router = APIRouter(prefix="/registrations", tags=["Portfolio - Registrations"])
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/registrations", tags=["Portfolio - Registrations"])
 async def create_registration(
     registration_in: RegistrationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     # Verify that the product, market, and authority exist and belong to the organization (for product and market)
     # Product check
@@ -117,7 +118,7 @@ async def update_registration(
     registration_id: str,
     registration_in: RegistrationUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Registration).where(
@@ -141,7 +142,7 @@ async def update_registration(
 async def delete_registration(
     registration_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Registration).where(
