@@ -13,6 +13,7 @@ from app.api.schemas.portfolio import (
     ProcessResponse,
 )
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.models.user import User
 
 router = APIRouter(prefix="/processes", tags=["Portfolio - Processes"])
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/processes", tags=["Portfolio - Processes"])
 async def create_process(
     process_in: ProcessCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     process = Process(
         id=str(uuid.uuid4()),
@@ -71,7 +72,7 @@ async def update_process(
     process_id: str,
     process_in: ProcessUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Process).where(
@@ -95,7 +96,7 @@ async def update_process(
 async def delete_process(
     process_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_configure)
 ):
     result = await db.execute(
         select(Process).where(
