@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 
 from app.db.database import get_db
+from app.ingestion.html_adapter import run_html_ingestion
 from app.ingestion.rss_ingestion import run_rss_ingestion
 from app.models.regulatory import (
     RegulatoryAuthority,
@@ -138,13 +139,21 @@ async def run_source(
 
     run_id = str(uuid.uuid4())
 
-    if source.source_type == SourceType.RSS:
-        # The one real adapter implemented so far -- see app/ingestion/rss_ingestion.py
-        # and docs/ingestion/INGESTION_RUN_STATUS.md. Run synchronously within the
-        # request (bounded by MAX_ENTRIES_PER_RUN and the fetcher's own timeouts) so the
-        # response already carries the real outcome, rather than the client needing to
-        # poll a background task for a small, bounded piece of work.
-        ingestion_status, error, counters = await run_rss_ingestion(
+    # Each adapter shares the same (status, error, counters) contract (see
+    # app/ingestion/rss_ingestion.py and app/ingestion/html_adapter.py) so the run
+    # record is built identically regardless of which one ran.
+    adapters = {
+        SourceType.RSS: run_rss_ingestion,
+        SourceType.HTML: run_html_ingestion,
+    }
+    adapter = adapters.get(source.source_type)
+
+    if adapter is not None:
+        # Run synchronously within the request (bounded by the adapter's own entry
+        # limits/timeouts) so the response already carries the real outcome, rather
+        # than the client needing to poll a background task for a small, bounded
+        # piece of work. See docs/ingestion/INGESTION_RUN_STATUS.md.
+        ingestion_status, error, counters = await adapter(
             db,
             source=source,
             organization_id=current_user.organization_id,
