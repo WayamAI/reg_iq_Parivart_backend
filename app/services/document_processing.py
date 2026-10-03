@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from app.core.config import settings
 from app.models.document import RegulatoryDocument, RegulatoryVersion, DocumentProcessingStatus
 from app.processing.extraction import extract_text_from_file
 from app.ai.service import AIService
@@ -11,9 +12,50 @@ import structlog
 
 logger = structlog.get_logger()
 
+
+async def _analyze_with_ai(extracted_text: str, title: str, document_id: str):
+    """
+    Attempt AI-assisted change/obligation extraction. Returns None, never raises, if AI
+    enrichment is disabled or no provider is registered or reachable -- that is an
+    expected configuration state here, not a processing failure. Deterministic text
+    extraction (the caller) has already succeeded and must not be reported as failed
+    just because the optional AI step could not run.
+    """
+    if not settings.AI_ENRICHMENT_ENABLED:
+        logger.info("ai_document_analysis_skipped_disabled", document_id=document_id)
+        return None
+
+    try:
+        ai_service = AIService()
+    except Exception as exc:
+        # Most commonly ValueError("No AI providers registered"): a configuration
+        # state, not a document-processing failure.
+        logger.warning(
+            "ai_provider_unavailable", document_id=document_id, error=str(exc)
+        )
+        return None
+
+    try:
+        return await ai_service.analyze_document(
+            extracted_text=extracted_text, document_title=title
+        )
+    except Exception as exc:
+        logger.warning(
+            "ai_document_analysis_failed", document_id=document_id, error=str(exc)
+        )
+        return None
+
+
 async def process_document(document_id: str, db: AsyncSession) -> bool:
     """
-    Process a regulatory document: extract text, run AI analysis, create version, update status.
+    Process a regulatory document: extract text (deterministic), create a version record,
+    then attempt optional AI-assisted change/obligation extraction.
+
+    AI is strictly additive here, matching the impact-assessment engine's contract
+    (app/matching/engine.py): deterministic text extraction and version tracking complete
+    and are persisted regardless of whether AI is enabled, available, or succeeds. A
+    document is only ever marked FAILED for a real processing failure (missing storage
+    key, extraction error) -- never because no AI provider happened to be registered.
     Returns True if successful, False otherwise.
     """
     try:
@@ -48,16 +90,8 @@ async def process_document(document_id: str, db: AsyncSession) -> bool:
         document.processing_status = DocumentProcessingStatus.PARSED
         await db.commit()
 
-        # Run AI analysis on the extracted text
-        logger.info("starting_ai_analysis", document_id=document_id)
-        ai_service = AIService()  # Uses default provider from settings
-        analysis_result = await ai_service.analyze_document(
-            extracted_text=extracted_text,
-            document_title=document.title
-        )
-        logger.info("ai_analysis_completed", document_id=document_id)
-
-        # Create a version record
+        # Create a version record. This is deterministic document-content tracking,
+        # independent of whether AI analysis is enabled, available, or succeeds.
         # Check if there's an existing current version
         existing_version_result = await db.execute(
             select(RegulatoryVersion)
@@ -86,23 +120,36 @@ async def process_document(document_id: str, db: AsyncSession) -> bool:
         db.add(version)
         await db.commit()  # Commit to get the version ID
 
-        # Persist the changes and obligations from the AI analysis
-        changes_created, obligations_created = await persist_intelligence(
-            db=db,
-            document_id=document.id,
-            version_id=version.id,
-            analysis_result=analysis_result,
-        )
-        logger.info(
-            "intelligence_persisted",
-            document_id=document_id,
-            version_id=version.id,
-            changes_count=len(changes_created),
-            obligations_count=len(obligations_created),
+        # Optional AI-assisted extraction. Never raises; returns None if AI is
+        # disabled, unavailable, or fails, in which case no changes/obligations are
+        # invented and the document is not falsely reported as AI-analyzed.
+        logger.info("starting_ai_analysis", document_id=document_id)
+        analysis_result = await _analyze_with_ai(
+            extracted_text=extracted_text, title=document.title, document_id=document_id
         )
 
-        # Update status to ANALYZED
-        document.processing_status = DocumentProcessingStatus.ANALYZED
+        if analysis_result is not None:
+            changes_created, obligations_created = await persist_intelligence(
+                db=db,
+                document_id=document.id,
+                version_id=version.id,
+                analysis_result=analysis_result,
+            )
+            logger.info(
+                "intelligence_persisted",
+                document_id=document_id,
+                version_id=version.id,
+                changes_count=len(changes_created),
+                obligations_count=len(obligations_created),
+            )
+            document.processing_status = DocumentProcessingStatus.ANALYZED
+        else:
+            # Text extraction and versioning succeeded; AI analysis did not run or did
+            # not succeed. PARSED accurately reflects what was actually done -- it is
+            # not relabelled ANALYZED, which would claim an AI pass that never happened.
+            logger.info("document_processed_without_ai_analysis", document_id=document_id)
+            document.processing_status = DocumentProcessingStatus.PARSED
+
         await db.commit()
 
         logger.info("document_processed_successfully", document_id=document_id)
