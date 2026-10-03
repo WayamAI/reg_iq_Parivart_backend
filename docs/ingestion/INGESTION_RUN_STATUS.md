@@ -1,6 +1,12 @@
 # Regulatory Source Ingestion-Run: Current Implementation Status
 
-Date: 2026-10-03. Method: direct source inspection of `app/api/routers/regulatory_sources.py` and a repository-wide `grep` for `process_source_run` (zero matches outside the commented-out call site itself).
+Date: 2026-10-03 (updated same day). Method: direct source inspection of `app/api/routers/regulatory_sources.py` and a repository-wide `grep` for `process_source_run` (zero matches outside the original commented-out call site, now removed — see Update below).
+
+**Update**: step 1 of the follow-up plan below (originally "recommended, not implemented") has since been implemented in this session, in its own commit (`fix(regulatory): report ingestion runs as FAILED instead of eternally QUEUED`). The sections below describing "currently QUEUED forever" describe the state *before* that fix; the corrected current behavior is summarized first.
+
+## Current behavior (as of the fix above)
+
+`POST /sources/{id}/run` still creates exactly one `IngestionRun` row, but now with `status=IngestionStatus.FAILED`, `completed_at` set, and an explicit `error` message naming the source's `source_type` (e.g. `"No ingestion adapter is implemented for source_type=RSS. This source's run was recorded but could not be executed."`). No document is fetched — this is **not** new ingestion capability, only an honest status for a run that cannot proceed. `FAILED` is a state the frontend already renders distinctly and stops polling on immediately (`TERMINAL_INGESTION_STATES` in the sibling frontend repo's `src/services/api/types.ts`), so a user triggering a run now gets an immediate, clear "did not work" signal instead of an indefinite "queued" that never resolves. `RegulatorySource.last_run_at`/`last_success_at`/`last_error` are still not updated — see the follow-up plan, item 2 onward, which remains entirely unimplemented.
 
 ## API endpoint and request schema
 
@@ -8,7 +14,7 @@ Date: 2026-10-03. Method: direct source inspection of `app/api/routers/regulator
 
 ## What is currently persisted
 
-Exactly one row: a new `IngestionRun` with `id`, `source_id`, `status=IngestionStatus.QUEUED`. `started_at`/`documents_discovered`/`documents_downloaded`/`documents_processed`/`documents_failed`/`error` are left at their column defaults (`None`/`0`). Nothing on the parent `RegulatorySource` (`last_run_at`, `last_success_at`, `last_error`) is ever updated by this endpoint.
+Exactly one row: a new `IngestionRun` with `id`, `source_id`, `status=IngestionStatus.FAILED`, `completed_at`, and `error` (as of the fix above — previously `status=IngestionStatus.QUEUED` with `error` left `None`). `started_at`/`documents_discovered`/`documents_downloaded`/`documents_processed`/`documents_failed` are left at their column defaults (`None`/`0`) either way — no document is actually fetched. Nothing on the parent `RegulatorySource` (`last_run_at`, `last_success_at`, `last_error`) is ever updated by this endpoint.
 
 ## Whether an adapter is invoked
 
@@ -16,17 +22,11 @@ Exactly one row: a new `IngestionRun` with `id`, `source_id`, `status=IngestionS
 
 ## Whether a job or processing function actually runs
 
-**No.** The exact line that would start one is present in source but deliberately commented out:
-```python
-# In the future, we would add a background task to process the source
-# For now, we just return the run and the client can poll for status
-# background_tasks.add_task(process_source_run, run_id, source_id, db)
-```
-`process_source_run` does not exist anywhere in the codebase — this is not a disabled-but-present function, it was never written. The endpoint signature already accepts `background_tasks: BackgroundTasks` as an unused parameter, left in place from when this was scaffolded.
+**No.** The commented-out line that would have started one has been removed as part of the honesty fix above (it referenced `process_source_run`, which does not exist anywhere in the codebase — not a disabled-but-present function, it was never written). The endpoint's `background_tasks: BackgroundTasks` parameter is now genuinely unused and could be removed in a future cleanup; it is left in place here to keep this change scoped to the status-honesty fix.
 
 ## How status and errors are represented
 
-`IngestionRun.status` only ever takes the value it is given at creation (`QUEUED`) in the current code path — it can never reach `RUNNING`, `COMPLETED`, `PARTIAL`, or `FAILED` through this endpoint, because nothing transitions it after the initial insert. `GET /sources/{id}/runs` and `GET /sources/runs/{run_id}` will therefore always show every run frozen at `QUEUED` indefinitely.
+`IngestionRun.status` is now set directly to `FAILED` at creation, with `completed_at` and a descriptive `error` populated in the same insert (as of the fix above). It can never reach `RUNNING`, `COMPLETED`, or `PARTIAL` through this endpoint, because nothing fetches or processes anything — there is no adapter to succeed or partially succeed. `GET /sources/{id}/runs` and `GET /sources/runs/{run_id}` show this `FAILED` status and `error` immediately; no polling is needed and the frontend's own terminal-state handling stops immediately rather than exhausting `MAX_POLLS`.
 
 ## Source adapters: implemented vs. placeholder
 
@@ -39,14 +39,14 @@ Exactly one row: a new `IngestionRun` with `id`, `source_id`, `status=IngestionS
 
 ## What the frontend can currently observe
 
-- Calling `POST /sources/{id}/run` succeeds (`202`) and returns a real `IngestionRun` id.
-- Polling `GET /sources/{id}/runs` or `GET /sources/runs/{run_id}` will show that run permanently at `QUEUED` — there is no event, timeout, or status change to observe, ever, for any source, regardless of `source_type`.
-- No document is created, no error is ever surfaced, and no distinction exists yet between "not implemented" and "queued and legitimately waiting" from the API's perspective. **This is the central honesty problem**: the response looks identical to a real asynchronous job that simply hasn't finished yet.
+- Calling `POST /sources/{id}/run` returns `202` with the `IngestionRun` already at `status: "FAILED"` and a populated `error` naming the missing adapter by `source_type`.
+- `GET /sources/{id}/runs` and `GET /sources/runs/{run_id}` show the same settled `FAILED` status immediately — no polling delay, no indefinite "queued" state.
+- No document is ever created by this endpoint, for any source, regardless of `source_type` — that part is unchanged. The difference is that the API now says so immediately and explicitly, instead of implying work is still in progress.
 
-## Recommended follow-up plan (not implemented this session — scope and risk too large for an isolated commit)
+## Follow-up plan
 
-1. **Immediate, small, safe step**: change the `202`/`QUEUED` response to something that does not imply forward progress — e.g. keep the `IngestionRun` row (useful as an audit record of "someone asked for this source to be run") but either (a) return `501 Not Implemented` for source types with no adapter, or (b) set `IngestionRun.status = FAILED` immediately with `error = "No adapter implemented for source_type=<type>"`. Either is a one-file change with a direct, fast test (assert the endpoint no longer claims success for an unimplemented source type).
-2. **Per-source-type adapter work**, each its own scoped effort with its own tests:
+1. ~~**Immediate, small, safe step**: ...~~ **Done this session** (option (b): `IngestionRun.status = FAILED` immediately with an explicit `error`). Verified by `app/tests/test_regulatory_sources_api.py` (6 tests): the response and a subsequent `GET /sources/runs/{run_id}` both show `FAILED` with a populated `error`, `404`/`400` behavior for an unknown/disabled source is unchanged.
+2. **Per-source-type adapter work** (not implemented), each its own scoped effort with its own tests:
    - DOCUMENT sources: no adapter needed (already handled by manual upload); the seeded "Manual Upload Source" row could be clarified in its own description/metadata to state it is never triggered via `run_source`.
    - RSS: smallest real adapter to build — fetch the feed, diff against previously-seen entries (idempotency key: entry GUID or link), create `RegulatoryDocument` rows for new entries only.
    - HTML: requires a per-source scraping strategy; higher risk of brittleness, should not be generalized into an unrestricted crawler (explicitly out of scope per this task's own instruction) — each HTML source needs its own targeted extraction rule, not a generic "fetch and guess" approach.
@@ -55,4 +55,4 @@ Exactly one row: a new `IngestionRun` with `id`, `source_id`, `status=IngestionS
 4. **Error reporting**: a real adapter must set `IngestionRun.status = FAILED` with a populated `error` field on any fetch/parse failure, and must update `RegulatorySource.last_run_at`/`last_success_at`/`last_error` — none of which exists today because nothing transitions the run at all.
 5. **Tests required before any of the above is claimed done**: a successful run creates the expected `RegulatoryDocument` row(s); a re-run with no new content creates zero new rows (idempotency); a fetch failure sets `FAILED` with a populated `error` and does not leave the run at `QUEUED` forever; a disabled source is rejected before any network call is attempted (already true today, via the `400` check, and must remain true).
 
-No ingestion behavior was implemented or claimed as fetched in this session. This document itself is the honest status: `run_source` persists a request record and nothing else.
+No document-fetching ingestion behavior was implemented or is claimed to work in this session. `run_source` persists a request record and an honest failure reason — nothing more. Steps 2–5 above remain entirely unimplemented.
