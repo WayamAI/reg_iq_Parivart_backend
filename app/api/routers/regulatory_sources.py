@@ -7,7 +7,14 @@ import uuid
 from datetime import datetime
 
 from app.db.database import get_db
-from app.models.regulatory import RegulatoryAuthority, RegulatorySource, IngestionRun, IngestionStatus
+from app.ingestion.rss_ingestion import run_rss_ingestion
+from app.models.regulatory import (
+    RegulatoryAuthority,
+    RegulatorySource,
+    IngestionRun,
+    IngestionStatus,
+    SourceType,
+)
 from app.models.document import RegulatoryDocument
 from app.api.schemas.regulatory import (
     SourceCreate,
@@ -118,31 +125,55 @@ async def run_source(
     if not source.enabled:
         raise HTTPException(status_code=400, detail="Source is disabled")
 
-    # Create an ingestion run record.
-    #
-    # No source adapter (RSS/HTML/API) is implemented yet -- see
-    # docs/ingestion/INGESTION_RUN_STATUS.md for the full status and follow-up plan.
-    # The run is therefore marked FAILED immediately, with an explicit reason, rather
-    # than left at QUEUED: the frontend's own TERMINAL_INGESTION_STATES
-    # (src/services/api/types.ts in the frontend repo) already treats QUEUED as
-    # non-terminal and polls GET /sources/{id}/runs waiting for it to settle. A run
-    # that can never leave QUEUED is indistinguishable, from the frontend's point of
-    # view, from one still legitimately in progress -- it would poll up to its
-    # MAX_POLLS limit and then simply stop, leaving the UI showing "queued" forever.
-    # FAILED is an existing, already-handled terminal state on both sides: no API
-    # contract or response-shape change, and the UI already renders it distinctly
-    # (critical/red) and stops polling immediately instead of after MAX_POLLS.
     run_id = str(uuid.uuid4())
-    run = IngestionRun(
-        id=run_id,
-        source_id=source_id,
-        status=IngestionStatus.FAILED,
-        completed_at=datetime.utcnow(),
-        error=(
-            f"No ingestion adapter is implemented for source_type={source.source_type.value}. "
-            "This source's run was recorded but could not be executed."
-        ),
-    )
+
+    if source.source_type == SourceType.RSS:
+        # The one real adapter implemented so far -- see app/ingestion/rss_ingestion.py
+        # and docs/ingestion/INGESTION_RUN_STATUS.md. Run synchronously within the
+        # request (bounded by MAX_ENTRIES_PER_RUN and the fetcher's own timeouts) so the
+        # response already carries the real outcome, rather than the client needing to
+        # poll a background task for a small, bounded piece of work.
+        ingestion_status, error, counters = await run_rss_ingestion(
+            db,
+            source=source,
+            organization_id=current_user.organization_id,
+            actor_id=current_user.id,
+        )
+        run = IngestionRun(
+            id=run_id,
+            source_id=source_id,
+            status=IngestionStatus[ingestion_status],
+            completed_at=datetime.utcnow(),
+            error=error,
+            **counters,
+        )
+        source.last_run_at = datetime.utcnow()
+        if ingestion_status in ("COMPLETED", "PARTIAL"):
+            source.last_success_at = datetime.utcnow()
+        if error:
+            source.last_error = error
+    else:
+        # No adapter implemented for this source_type yet -- see
+        # docs/ingestion/INGESTION_RUN_STATUS.md. The run is marked FAILED
+        # immediately, with an explicit reason, rather than left at QUEUED: the
+        # frontend's own TERMINAL_INGESTION_STATES (src/services/api/types.ts in the
+        # frontend repo) already treats QUEUED as non-terminal and polls
+        # GET /sources/{id}/runs waiting for it to settle. A run that can never leave
+        # QUEUED is indistinguishable, from the frontend's point of view, from one
+        # still legitimately in progress.
+        run = IngestionRun(
+            id=run_id,
+            source_id=source_id,
+            status=IngestionStatus.FAILED,
+            completed_at=datetime.utcnow(),
+            error=(
+                f"No ingestion adapter is implemented for source_type={source.source_type.value}. "
+                "This source's run was recorded but could not be executed."
+            ),
+        )
+        source.last_run_at = datetime.utcnow()
+        source.last_error = run.error
+
     db.add(run)
     await db.commit()
     await db.refresh(run)
