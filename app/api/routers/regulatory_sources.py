@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 from app.db.database import get_db
-from app.models.regulatory import RegulatorySource, IngestionRun, IngestionStatus
+from app.models.regulatory import RegulatoryAuthority, RegulatorySource, IngestionRun, IngestionStatus
 from app.models.document import RegulatoryDocument
 from app.api.schemas.regulatory import (
     SourceCreate,
@@ -32,7 +32,10 @@ async def create_source(
     if not authority:
         raise HTTPException(status_code=400, detail="Authority not found")
 
-    source = RegulatorySource(**source_in.dict())
+    # id is a String(36) primary key with no column default, so an omitted id inserts
+    # NULL and the insert fails -- the same bug class already fixed for documents
+    # (f4b6853) and regulatory authorities (this session).
+    source = RegulatorySource(id=str(uuid.uuid4()), **source_in.dict())
     db.add(source)
     await db.commit()
     await db.refresh(source)
