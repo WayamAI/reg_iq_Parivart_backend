@@ -1,7 +1,14 @@
 """
-Safe HTTP retrieval of a feed body: timeouts, a bounded response size, and manual
-redirect handling so every hop -- not just the original URL -- is revalidated by
+Safe HTTP retrieval of a feed or page body: timeouts, a bounded response size, and
+manual redirect handling so every hop -- not just the original URL -- is revalidated by
 app.ingestion.url_safety before being followed.
+
+Despite the module name (kept for the RSS adapter that introduced it, to avoid
+churning existing imports), `fetch_feed` is content-type agnostic via
+`acceptable_content_type_markers` and is reused as-is by the HTML adapter
+(app/ingestion/html_adapter.py) with `acceptable_content_type_markers=("html",)`. The
+safety properties (SSRF validation, size bound, redirect re-validation, timeouts) are
+identical regardless of what is being fetched.
 """
 
 from typing import Callable, Optional
@@ -38,6 +45,7 @@ async def fetch_feed(
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     client: Optional[httpx.AsyncClient] = None,
     url_validator: Callable[[str], None] = validate_outbound_url,
+    acceptable_content_type_markers: tuple = ACCEPTABLE_CONTENT_TYPES,
 ) -> bytes:
     """
     Fetch a feed's raw body, following redirects manually (httpx's automatic redirect
@@ -79,10 +87,11 @@ async def fetch_feed(
 
                     content_type = response.headers.get("content-type", "")
                     if not any(
-                        marker in content_type.lower() for marker in ACCEPTABLE_CONTENT_TYPES
+                        marker in content_type.lower()
+                        for marker in acceptable_content_type_markers
                     ):
                         logger.warning(
-                            "rss_unexpected_content_type",
+                            "ingestion_unexpected_content_type",
                             url=current_url,
                             content_type=content_type,
                         )
