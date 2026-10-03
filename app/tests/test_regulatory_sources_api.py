@@ -266,7 +266,10 @@ async def _created_source(client, auth_headers, source_type="API", connector_typ
 
 
 async def test_run_source_reports_failed_not_an_eternal_queued(client, auth_headers):
-    source = await _created_source(client, auth_headers)
+    # DOCUMENT is manual-upload-only and deliberately has no run adapter (RSS, HTML,
+    # API and WEB_SERVICE all do) -- this is what exercises the "no adapter
+    # implemented" path below.
+    source = await _created_source(client, auth_headers, source_type="DOCUMENT", connector_type="DOCUMENT")
 
     response = await client.post(
         f"/api/v1/regulatory/sources/{source['id']}/run", headers=auth_headers
@@ -276,7 +279,7 @@ async def test_run_source_reports_failed_not_an_eternal_queued(client, auth_head
     run = response.json()
     assert run["status"] == IngestionStatus.FAILED.value
     assert run["error"]
-    assert "API" in run["error"]
+    assert "DOCUMENT" in run["error"]
     assert run["completed_at"] is not None
 
 
