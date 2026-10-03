@@ -7,6 +7,7 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_configure
 from app.api.schemas.impact import (
     ImpactAssessmentCreate,
     ImpactAssessmentResponse,
@@ -61,7 +62,7 @@ async def analyze_impact(
     payload: ImpactAssessmentCreate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_configure),
 ):
     """
     Run deterministic portfolio impact analysis for a regulatory change.
@@ -151,7 +152,7 @@ async def reanalyze_impact(
     assessment_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_configure),
 ):
     """Re-run the deterministic analysis, producing a new analysis_version."""
     existing = await db.execute(
