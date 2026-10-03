@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.permissions import require_operate
 from app.api.schemas.action import (
     ActionCreate,
     ActionResponse,
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/actions", tags=["Actions"])
 async def create_action(
     payload: ActionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operate),
 ):
     """
     Open a remediation action.
@@ -97,7 +98,7 @@ async def update_action(
     action_id: str,
     payload: ActionUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operate),
 ):
     try:
         action = await ActionService.update_action(
@@ -125,7 +126,7 @@ async def transition_action_status(
     action_id: str,
     payload: ActionStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_operate),
 ):
     """
     Move an action along its state machine.
