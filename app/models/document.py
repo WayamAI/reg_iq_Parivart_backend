@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, func, Integer, Boolean
+from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, func, Integer, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 import enum
 from app.db.base import Base
@@ -27,6 +27,16 @@ class DocumentType(str, enum.Enum):
 
 class RegulatoryDocument(Base):
     __tablename__ = "regulatory_documents"
+    __table_args__ = (
+        # Tenant-scoped, not global: the same file content uploaded by two different
+        # organizations must produce two independent document records. A global unique
+        # constraint on sha256 alone previously meant a second organization's upload of
+        # byte-identical content (e.g. a public FDA PDF) either failed outright or, in the
+        # application's own duplicate-check path, silently returned the FIRST
+        # organization's document id to the second -- a cross-tenant existence/identity
+        # leak. See app/services/document_service.check_duplicate_sha256.
+        UniqueConstraint("organization_id", "sha256", name="uq_regulatory_documents_org_sha256"),
+    )
 
     id = Column(String(36), primary_key=True, index=True)
     organization_id = Column(String(36), ForeignKey("organizations.id"), index=True)
@@ -41,7 +51,9 @@ class RegulatoryDocument(Base):
     storage_key = Column(String(500))
     mime_type = Column(String(100))
     file_size = Column(Integer)
-    sha256 = Column(String(64), unique=True, index=True)
+    # Indexed for lookup, but uniqueness is enforced per-tenant via the composite
+    # constraint above, not on this column alone.
+    sha256 = Column(String(64), index=True)
     publication_date = Column(DateTime(timezone=True))
     effective_date = Column(DateTime(timezone=True))
     retrieved_at = Column(DateTime(timezone=True), server_default=func.now())
