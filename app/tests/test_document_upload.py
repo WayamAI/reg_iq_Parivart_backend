@@ -216,4 +216,101 @@ async def test_compute_sha256_rewinds_the_stream():
 
 async def test_check_duplicate_sha256_returns_none_when_absent(demo_org):
     async with AsyncSessionLocal() as session:
-        assert await check_duplicate_sha256("0" * 64, session) is None
+        assert await check_duplicate_sha256("0" * 64, session, demo_org.id) is None
+
+
+# --- tenant isolation -------------------------------------------------------------------
+
+
+async def test_identical_content_from_two_organizations_creates_two_documents(
+    demo_org, tmp_path, monkeypatch
+):
+    """
+    The same file content uploaded by two different organizations must produce two
+    independent document records, not a cross-tenant "duplicate" pointing at the other
+    organization's row. Regression test for a global (non-tenant-scoped) sha256 lookup
+    that previously handed org B the id of org A's document.
+    """
+    from app.models.organization import Organization
+
+    monkeypatch.setattr(
+        "app.services.document_service.storage", LocalStorage(base_path=str(tmp_path))
+    )
+    payload = b"A shared public regulatory notice, identical for every reader."
+
+    async with AsyncSessionLocal() as session:
+        other_org = Organization(
+            id=str(uuid.uuid4()), name="Other Org", slug=f"other-org-{uuid.uuid4().hex[:8]}"
+        )
+        session.add(other_org)
+        await session.flush()
+
+        source = await _source(session)
+
+        first, first_duplicate = await upload_and_create_document(
+            db=session,
+            organization_id=demo_org.id,
+            authority_id=source.authority_id,
+            source_id=source.id,
+            file_data=io.BytesIO(payload),
+            file_name="shared-notice.txt",
+            content_type="text/plain",
+            title="Shared Notice (Org A copy)",
+        )
+        second, second_duplicate = await upload_and_create_document(
+            db=session,
+            organization_id=other_org.id,
+            authority_id=source.authority_id,
+            source_id=source.id,
+            file_data=io.BytesIO(payload),
+            file_name="shared-notice.txt",
+            content_type="text/plain",
+            title="Shared Notice (Org B copy)",
+        )
+
+        assert first_duplicate is False
+        assert second_duplicate is False
+        assert second.id != first.id
+        assert second.organization_id == other_org.id
+        assert first.organization_id == demo_org.id
+        assert second.sha256 == first.sha256
+
+
+async def test_cross_tenant_document_lookup_returns_404_not_the_record(
+    client, demo_org, auth_headers, tmp_path, monkeypatch
+):
+    """
+    A document id belonging to another organization must read as missing, not as
+    forbidden and never as the record itself -- consistent with every other
+    tenant-scoped lookup in this API (see app/api/routers/regulatory_documents.py).
+    """
+    from app.models.organization import Organization
+
+    monkeypatch.setattr(
+        "app.services.document_service.storage", LocalStorage(base_path=str(tmp_path))
+    )
+
+    async with AsyncSessionLocal() as session:
+        other_org = Organization(
+            id=str(uuid.uuid4()), name="Other Org", slug=f"other-org-{uuid.uuid4().hex[:8]}"
+        )
+        session.add(other_org)
+        await session.flush()
+
+        source = await _source(session)
+        other_document, _ = await upload_and_create_document(
+            db=session,
+            organization_id=other_org.id,
+            authority_id=source.authority_id,
+            source_id=source.id,
+            file_data=io.BytesIO(b"Another organization's private notice."),
+            file_name="private.txt",
+            content_type="text/plain",
+            title="Private Notice",
+        )
+
+    response = await client.get(
+        f"/api/v1/regulatory/documents/{other_document.id}", headers=auth_headers
+    )
+
+    assert response.status_code == 404
