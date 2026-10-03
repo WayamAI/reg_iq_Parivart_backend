@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -23,7 +25,13 @@ async def create_authority(
 ):
     # Ensure the user has permission (ADMIN or REGULATORY_MANAGER)
     # For now we allow any authenticated user, but we can add role checks later
-    authority = RegulatoryAuthority(**authority_in.dict())
+    # (see docs/security/AUTHORIZATION_GAPS.md).
+    #
+    # id is a String(36) primary key with no column default (see app/db/base.py: Base
+    # is a plain declarative_base with no id mixin), so an omitted id inserts NULL and
+    # the insert fails -- the same class of bug already fixed once for document
+    # creation (commit f4b6853).
+    authority = RegulatoryAuthority(id=str(uuid.uuid4()), **authority_in.dict())
     db.add(authority)
     await db.commit()
     await db.refresh(authority)
