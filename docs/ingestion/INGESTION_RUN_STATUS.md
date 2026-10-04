@@ -1,14 +1,15 @@
 # Regulatory Source Ingestion-Run: Current Implementation Status
 
-Date: 2026-10-03, revised the same day after implementing a real RSS adapter. Earlier revisions of this document recorded first a stub (`QUEUED` forever) and then an honesty fix (`FAILED` immediately, no fetch). **Both are now superseded for `source_type=RSS`** — see below. Every other `source_type` still behaves per the honesty-fix section further down.
+Date: 2026-10-03, revised the same day after implementing real RSS and HTML adapters. Earlier revisions of this document recorded first a stub (`QUEUED` forever) and then an honesty fix (`FAILED` immediately, no fetch). **Both are now superseded for `source_type=RSS` and `source_type=HTML`** — see below. `API`/`WEB_SERVICE` still behave per the honesty-fix section further down.
 
 ## Current behavior by source_type
 
 | `source_type` | Behavior |
 |---|---|
 | `RSS` | **Real adapter.** Fetches the feed, parses entries, persists new ones as tenant-scoped `RegulatoryDocument` rows, returns accurate run counters. See "RSS adapter" below. |
-| `DOCUMENT` | Not reachable via this endpoint at all — manual upload (`POST /regulatory/documents/upload`) is a separate code path. A `DOCUMENT`-type source triggered via `run_source` falls into the generic "no adapter" `FAILED` response below, same as `HTML`/`API`/`WEB_SERVICE`. |
-| `HTML`, `API`, `WEB_SERVICE` | **Still a stub.** No adapter exists. `run_source` returns `202` with the `IngestionRun` already `FAILED` and an explicit `error` naming the `source_type` — honest, immediate, never an indefinite `QUEUED`. |
+| `HTML` | **Real adapter, deliberately minimal.** Fetches the single configured page and persists its whole visible text as one document — never follows a link, never scrapes a site. See "HTML adapter" below. |
+| `DOCUMENT` | Not reachable via this endpoint at all — manual upload (`POST /regulatory/documents/upload`) is a separate code path. A `DOCUMENT`-type source triggered via `run_source` falls into the generic "no adapter" `FAILED` response below, same as `API`/`WEB_SERVICE`. |
+| `API`, `WEB_SERVICE` | **Still a stub.** No adapter exists. `run_source` returns `202` with the `IngestionRun` already `FAILED` and an explicit `error` naming the `source_type` — honest, immediate, never an indefinite `QUEUED`. |
 
 ## RSS adapter
 
@@ -85,12 +86,35 @@ curl http://localhost:8000/api/v1/regulatory/documents/ -H "Authorization: Beare
 
 This was **not executed** as part of this session — no outbound network call to a real feed was made. The automated test suite above is what was actually run and passed.
 
+## HTML adapter
+
+### Contract
+
+- **Trigger**: `POST /api/v1/regulatory/sources/{id}/run` where `source_type == HTML` and `enabled == True`. Same `require_configure` gate as RSS.
+- **Deliberately minimal, by design, not by oversight**: a real per-site scraper needs a per-source extraction rule (which part of a given regulator's page is the actual notice vs. navigation/boilerplate) — a source-specific decision this adapter does not make or guess at. Instead, it fetches the single configured `source.url` and persists the **whole page's visible text** (via the same `extract_text_from_html()` already used for manual HTML uploads — script/style stripped, nothing else) as **one** document per run. It never follows a link on the page; nothing beyond the single configured URL is ever fetched. This is useful specifically for a source whose `url` already points at a specific notice/page — the common case for a one-off regulatory announcement — and is honest about not being more than that.
+- **Tenant attribution**: identical to RSS — the triggering user's organization.
+- **Output**: same `(status, error, counters)` contract as RSS (`documents_discovered`/`downloaded`/`processed`/`failed` are all `0` or `1`, since there is exactly one "entry" — the page itself). `COMPLETED` on success (including when the page was an already-seen duplicate), `FAILED` if the fetch fails, the page has no extractable text, or persistence fails.
+- **Not implemented, deliberately**: any link-following, any per-site CSS-selector extraction rule, any attachment/asset fetching.
+
+### Implementation
+
+`app/ingestion/html_adapter.py`, reusing `app/ingestion/rss_fetcher.fetch_feed` (generalized this session via an `acceptable_content_type_markers` parameter so RSS and HTML share one safety-reviewed fetch path — see the SSRF/timeout/size protections already documented above, identical for both) and `app/processing/extraction.extract_text_from_html`.
+
+### Test results
+
+| File | Tests | Scope |
+|---|---|---|
+| `test_html_adapter.py` | 7 | Orchestrator against the real DB/storage, `fetch_feed` monkeypatched: valid page, idempotent re-run, missing-title fallback, empty-text-content `FAILED`, fetch failure, malformed/unclosed HTML, missing url |
+| `test_html_source_run_api.py` | 2 | End-to-end over HTTP (auth, role gating, persistence, counters) |
+
+No real network access in any of the above.
+
 ## Known limitations
 
-- Only RSS and Atom are supported; `HTML`/`API`/`WEB_SERVICE` remain an honest stub (see the per-source-type follow-up plan below).
+- `API`/`WEB_SERVICE` remain an honest stub (see the follow-up plan below).
 - No scheduler exists — a run only happens when `POST /sources/{id}/run` is called; nothing triggers it automatically (and per this task's explicit instruction, nothing should automatically execute a registered source at application startup — confirmed not done).
-- `MAX_ENTRIES_PER_RUN` (50) means a feed with more than 50 new items since the last run will only ingest the first 50 per call; a backlog larger than that requires multiple runs.
-- Entry content is exactly what the feed provides (title + description) — no fetching of the entry's own article page, so a feed with only a teaser/summary yields a document with only that teaser/summary as its `extracted_text`.
+- RSS: `MAX_ENTRIES_PER_RUN` (50) means a feed with more than 50 new items since the last run will only ingest the first 50 per call; a backlog larger than that requires multiple runs. Entry content is exactly what the feed provides (title + description) — no fetching of the entry's own article page.
+- HTML: persists the *entire* page's visible text, not an isolated "article body" — a page with heavy navigation/boilerplate will have that noise in `extracted_text` alongside the substantive content; deterministic matching and human review downstream are expected to work with that, exactly as they would for a manually uploaded HTML file processed the same way today.
 - `RegulatorySource.schedule` (e.g. a cron expression) remains stored data with no interpreter; it does not cause anything to run automatically.
 
 ## Original API endpoint reference (unchanged)
@@ -99,8 +123,9 @@ This was **not executed** as part of this session — no outbound network call t
 
 ## Remaining follow-up plan (not implemented this session)
 
-1. ~~Immediate honesty fix (FAILED instead of eternal QUEUED)~~ — done, then superseded by the real RSS adapter above.
+1. ~~Immediate honesty fix (FAILED instead of eternal QUEUED)~~ — done, then superseded by the real adapters above.
 2. ~~RSS adapter~~ — done, this document.
-3. **HTML adapter**: requires a per-source scraping strategy; higher risk of brittleness, should not be generalized into an unrestricted crawler (explicitly out of scope) — each HTML source needs its own targeted extraction rule.
+3. ~~HTML adapter (minimal, whole-page)~~ — done, this document.
 4. **API/WEB_SERVICE adapter**: needs a per-source request/response mapping; no generic implementation is safe to write without knowing the specific regulator API's shape.
-5. **Scheduler**: nothing currently triggers a run automatically; adding one is a separate, larger design question (polling interval, concurrency, failure backoff) not addressed here.
+5. **Richer HTML extraction** (optional future work, not a gap in what exists): a per-source CSS-selector or readability-style extraction rule, if a real need for isolating article content from page chrome emerges — a genuine design decision, not implemented speculatively here.
+6. **Scheduler**: nothing currently triggers a run automatically; adding one is a separate, larger design question (polling interval, concurrency, failure backoff) not addressed here.

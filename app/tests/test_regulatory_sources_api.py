@@ -12,9 +12,10 @@ while documenting ingestion-run status (docs/ingestion/INGESTION_RUN_STATUS.md).
    identical to one still legitimately in progress. For a source_type with no adapter,
    the run is now marked FAILED immediately with an explicit reason -- an existing
    terminal state on both sides, no API contract or response-shape change. These tests
-   use source_type=HTML specifically to exercise that still-unimplemented path; RSS now
-   has a real adapter (app/ingestion/rss_ingestion.py) and is covered separately in
-   test_rss_source_run_api.py.
+   use source_type=API specifically to exercise that still-unimplemented path; RSS and
+   HTML now have real adapters (app/ingestion/rss_ingestion.py,
+   app/ingestion/html_adapter.py) and are covered separately in
+   test_rss_source_run_api.py / test_html_adapter.py.
 """
 
 import uuid
@@ -247,7 +248,7 @@ async def test_create_source_404s_for_an_unknown_authority(client, auth_headers)
     assert "not found" in response.text.lower()
 
 
-async def _created_source(client, auth_headers, source_type="HTML", connector_type="HTML") -> dict:
+async def _created_source(client, auth_headers, source_type="API", connector_type="API") -> dict:
     authority_id = await _authority_payload(client, auth_headers)
     response = await client.post(
         "/api/v1/regulatory/sources/",
@@ -265,7 +266,10 @@ async def _created_source(client, auth_headers, source_type="HTML", connector_ty
 
 
 async def test_run_source_reports_failed_not_an_eternal_queued(client, auth_headers):
-    source = await _created_source(client, auth_headers)
+    # DOCUMENT is manual-upload-only and deliberately has no run adapter (RSS, HTML,
+    # API and WEB_SERVICE all do) -- this is what exercises the "no adapter
+    # implemented" path below.
+    source = await _created_source(client, auth_headers, source_type="DOCUMENT", connector_type="DOCUMENT")
 
     response = await client.post(
         f"/api/v1/regulatory/sources/{source['id']}/run", headers=auth_headers
@@ -275,7 +279,7 @@ async def test_run_source_reports_failed_not_an_eternal_queued(client, auth_head
     run = response.json()
     assert run["status"] == IngestionStatus.FAILED.value
     assert run["error"]
-    assert "HTML" in run["error"]
+    assert "DOCUMENT" in run["error"]
     assert run["completed_at"] is not None
 
 
