@@ -1,6 +1,17 @@
 """
 app/ingestion/rss_fetcher.py: fully mocked transport, no real network access.
+
+The one exception is test_real_client_construction_does_not_raise below, which
+deliberately exercises fetch_feed's own httpx.AsyncClient construction (the
+`client=None` path every test above bypasses by injecting a MockTransport
+client) against a real loopback server -- that construction line is exactly
+what broke in production (httpx.Timeout requires either a default or all four
+phases set explicitly; the installed httpx version raises ValueError
+otherwise), and no mocked-client test can catch a regression in it.
 """
+
+import http.server
+import threading
 
 import httpx
 import pytest
@@ -135,3 +146,33 @@ async def test_unsafe_url_is_refused_before_any_request():
             url_validator=unsafe_validator,
         )
     assert called["count"] == 0
+
+
+async def test_real_client_construction_does_not_raise():
+    """Regression test for the production ValueError: without an injected
+    `client=`, fetch_feed must build its own httpx.AsyncClient successfully. A
+    real loopback HTTP server is used (not a mock) so this exercises the actual
+    httpx.Timeout(...) construction; url_validator is relaxed only here, the
+    same way other tests in this file relax it to isolate fetch behavior from
+    URL-safety behavior (covered separately in test_url_safety.py)."""
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "application/rss+xml")
+            self.end_headers()
+            self.wfile.write(FEED_BODY)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        body = await fetch_feed(f"http://127.0.0.1:{port}/feed.xml", url_validator=_always_safe)
+        assert body == FEED_BODY
+    finally:
+        server.shutdown()
+        thread.join()
