@@ -58,8 +58,17 @@ async def fetch_feed(
     """
     own_client = client is None
     if client is None:
+        # httpx.Timeout requires either a default or all four phases set explicitly
+        # (installed httpx>=0.28 raises ValueError otherwise) -- write/pool have no
+        # separate setting here, so they're bounded by the same cap as read rather
+        # than left unset.
         client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=connect_timeout_seconds, read=read_timeout_seconds),
+            timeout=httpx.Timeout(
+                connect=connect_timeout_seconds,
+                read=read_timeout_seconds,
+                write=read_timeout_seconds,
+                pool=read_timeout_seconds,
+            ),
             follow_redirects=False,
         )
 
