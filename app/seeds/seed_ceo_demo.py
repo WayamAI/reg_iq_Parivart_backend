@@ -25,6 +25,7 @@ from app.models.intelligence import (
     RegulatoryChange,
     RegulatoryObligation,
 )
+from app.models.impact import ImpactAssessment
 from app.models.organization import Organization
 from app.models.portfolio import (
     Control,
@@ -45,6 +46,7 @@ from app.models.regulatory import (
     SourceType,
 )
 from app.models.user import User, UserRole
+from app.matching.engine import MatchingEngineService
 from app.services.audit_service import (
     ENTITY_REGULATORY_CHANGE,
     ENTITY_REGULATORY_OBLIGATION,
@@ -568,6 +570,7 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
     report it honestly. Every "created" value is 0 on a second run.
     """
     counters = (
+        "assessments",
         "organizations",
         "users",
         "authorities",
@@ -810,8 +813,12 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
 
     document_id = await _seed_ceo_demo_notice(db, org_id, authority_ids["FMDA"], created, existing)
 
+    change_ids: dict[str, str] = {}
     if document_id is not None:
-        await _seed_ceo_demo_intelligence(db, org_id, document_id, created, existing)
+        change_ids = await _seed_ceo_demo_intelligence(
+            db, org_id, document_id, created, existing
+        )
+        await _seed_ceo_demo_assessments(db, org_id, change_ids, created, existing)
 
     print(f"CEO demo seed: created={created} existing={existing} (org {org_id})")
     return {
@@ -883,7 +890,7 @@ async def _seed_ceo_demo_notice(
 
 async def _seed_ceo_demo_intelligence(
     db: AsyncSession, org_id: str, document_id: str, created: dict, existing: dict
-) -> None:
+) -> dict[str, str]:
     """
     The three regulatory changes and ten obligations the notice introduces, written as
     plain ORM rows.
@@ -1015,3 +1022,58 @@ async def _seed_ceo_demo_intelligence(
         )
 
     await db.commit()
+    return change_ids
+
+
+async def _seed_ceo_demo_assessments(
+    db: AsyncSession, org_id: str, change_ids: dict[str, str], created: dict, existing: dict
+) -> dict[str, str]:
+    """
+    One Impact Assessment per regulatory change, produced by the real matching engine.
+
+    Nothing is asserted about the result. The engine computes overall_impact_level and
+    overall_confidence from the evidence it actually found; the demo dataset's advisory
+    confidence figures are not written anywhere, because a seeded number would be a claim
+    about an analysis that did not produce it.
+
+    Idempotency is checked here rather than left to the engine. `analyze_change_impact`
+    is itself idempotent without force_reanalyze, but it only knows that *after* loading
+    the portfolio and the obligations; skipping the call outright on a rerun is cheaper and
+    makes the created/existing counters honest without inferring them from the returned row.
+    """
+    actor_id = (
+        await db.execute(
+            select(User.id).where(
+                User.email == "regulatory.analyst@asterion-parivart.example"
+            )
+        )
+    ).scalars().first()
+
+    assessment_ids: dict[str, str] = {}
+    for key in ("CHG-001", "CHG-002", "CHG-003"):
+        change_id = change_ids.get(key)
+        if change_id is None:
+            continue
+        existing_id = (
+            await db.execute(
+                select(ImpactAssessment.id).where(
+                    ImpactAssessment.organization_id == org_id,
+                    ImpactAssessment.regulatory_change_id == change_id,
+                )
+            )
+        ).scalars().first()
+        if existing_id is not None:
+            assessment_ids[key] = existing_id
+            existing["assessments"] += 1
+            continue
+
+        assessment = await MatchingEngineService.analyze_change_impact(
+            db,
+            organization_id=org_id,
+            regulatory_change_id=change_id,
+            actor_id=actor_id,
+        )
+        assessment_ids[key] = assessment.id
+        created["assessments"] += 1
+
+    return assessment_ids
