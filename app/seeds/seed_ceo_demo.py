@@ -10,6 +10,7 @@ Idempotent per entity, like app/seeds/demo_data.py: every row is checked by its 
 key before insert, so a second run creates nothing and the ids stay stable.
 """
 
+import io
 import uuid
 from datetime import datetime, timezone
 
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.core.security import hash_password
+from app.models.document import DocumentType
 from app.models.organization import Organization
 from app.models.portfolio import (
     Control,
@@ -37,6 +39,8 @@ from app.models.regulatory import (
     SourceType,
 )
 from app.models.user import User, UserRole
+from app.services.document_processing import process_document
+from app.services.document_service import upload_and_create_document
 
 # The CEO demo organization every entity in this module belongs to, and its idempotency
 # key.
@@ -291,6 +295,110 @@ CEO_DEMO_REGISTRATIONS = [
 CEO_DEMO_REGISTRATION_VALID_FROM = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
+CEO_DEMO_NOTICE_TITLE = (
+    "Cybersecurity, Post-Market Surveillance and Software Traceability Requirements for "
+    "Connected Medical Devices"
+)
+
+# The ten clauses verbatim from the demo dataset, quoted rather than paraphrased: the
+# matching engine and the AI enrichment step both read this text, so demo results only
+# mean anything if the words are the dataset's own.
+CEO_DEMO_NOTICE_CLAUSES = [
+    ("REQ-001", "Quarterly Post-Market Surveillance Review",
+     "Manufacturers shall perform and document a post-market surveillance review for "
+     "each covered connected device at least once every calendar quarter."),
+    ("REQ-002", "Cybersecurity Vulnerability Assessment",
+     "A documented cybersecurity vulnerability assessment shall be completed within 10 "
+     "business days after identification of a material vulnerability affecting a covered "
+     "product."),
+    ("REQ-003", "Software Update Evidence Retention",
+     "Manufacturers shall retain records demonstrating the testing, approval, release and "
+     "deployment status of safety-relevant software updates."),
+    ("REQ-004", "Risk Management File Review",
+     "The risk-management file shall be reviewed after a safety-relevant software change, "
+     "material cybersecurity finding, or significant post-market signal."),
+    ("REQ-005", "Labeling and User Instruction Consistency",
+     "Product labeling, electronic labeling and user instructions shall remain consistent "
+     "with the current approved product configuration and identified safety controls."),
+    ("REQ-006", "Safety Incident Escalation",
+     "A confirmed reportable safety incident shall be escalated to the responsible "
+     "regulatory and safety functions within two business days of confirmation."),
+    ("REQ-007", "Regulatory Record Retention",
+     "Records supporting compliance with the requirements of this notice shall be retained "
+     "for at least seven years after creation or the applicable longer period required by "
+     "the product’s market."),
+    ("REQ-008", "End-to-End Traceability",
+     "For each safety-relevant software change, the manufacturer shall maintain "
+     "traceability between the product version, software change record, risk assessment, "
+     "validation evidence and any resulting CAPA."),
+    ("REQ-009", "Vulnerability Remediation Verification",
+     "Material cybersecurity vulnerabilities shall have documented remediation or "
+     "risk-acceptance decisions, including verification evidence and responsible-owner "
+     "approval."),
+    ("REQ-010", "Periodic Control Effectiveness Review",
+     "Controls used to manage cybersecurity, software validation and post-market "
+     "surveillance shall be reviewed periodically for effectiveness and documented "
+     "deficiencies shall be assigned for remediation."),
+]
+
+
+def _ceo_demo_notice_body() -> bytes:
+    """
+    The uploaded file's actual bytes. text/plain, because that is what
+    app/processing/extraction.py can extract -- an .md upload would come back as an
+    unsupported MIME type and the document would be marked FAILED.
+
+    The banner is the first line so the synthetic origin is unmissable in any excerpt,
+    preview or search hit, not only to someone who reads to the end. The transition
+    deadline is stated in the body because RegulatoryDocument has publication_date and
+    effective_date but no transition_date column.
+    """
+    lines = [
+        "PARIVART DEMO DATA — SYNTHETIC / NON-PRODUCTION. Notice ID: FMDA-2026-041-SYN. "
+        "This is not a real regulation.",
+        "",
+        "Issuing Authority: Federal Medical Device Authority (FMDA) — synthetic",
+        f"Title: {CEO_DEMO_NOTICE_TITLE}",
+        "Publication Date: 05 October 2026",
+        "Effective Date: 01 January 2027",
+        "Transition Deadline: 30 June 2027",
+        "Jurisdiction: United States (synthetic)",
+        "Applies To: Manufacturers of connected medical devices and software-enabled "
+        "medical devices",
+        "",
+        "EXECUTIVE SUMMARY",
+        "",
+        "This synthetic notice introduces enhanced requirements for cybersecurity "
+        "vulnerability assessment, post-market surveillance, software-update traceability, "
+        "risk-management review, labeling consistency, safety-event escalation, record "
+        "retention, and linkage between product versions and quality records. "
+        "Manufacturers must establish documented procedures, maintain evidence, and ensure "
+        "that relevant software-enabled products and post-market processes can demonstrate "
+        "traceability. All requirements below take effect on 01 January 2027, with a "
+        "transition deadline of 30 June 2027 for full demonstrated compliance.",
+        "",
+        "REGULATORY REQUIREMENTS / CLAUSES",
+        "",
+    ]
+    for req_id, heading, text in CEO_DEMO_NOTICE_CLAUSES:
+        lines += [f"{req_id} — {heading}", text, ""]
+    lines += [
+        "APPLICABILITY NOTES",
+        "",
+        "REQ-002 applies when a vulnerability is material or has a plausible safety "
+        "impact; routine low-risk informational findings are outside the synthetic "
+        "scenario.",
+        "REQ-004 applies after safety-relevant software changes, material cybersecurity "
+        "findings, or significant post-market signals.",
+        "REQ-006 applies only after an incident has been confirmed as reportable under the "
+        "synthetic notice.",
+        "REQ-008 is particularly relevant to software-enabled and connected products.",
+        "",
+        "END OF SYNTHETIC NOTICE — PARIVART DEMO DATA, NOT A REAL REGULATION.",
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 async def _exists(db: AsyncSession, model, *conditions) -> bool:
     result = await db.execute(select(model.id).where(*conditions).limit(1))
     return result.scalars().first() is not None
@@ -313,6 +421,7 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
         "processes",
         "controls",
         "registrations",
+        "documents",
     )
     created = dict.fromkeys(counters, 0)
     existing = dict.fromkeys(counters, 0)
@@ -540,5 +649,72 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
 
     await db.flush()
     await db.commit()
+
+    document_id = await _seed_ceo_demo_notice(db, org_id, authority_ids["FMDA"], created, existing)
+
     print(f"CEO demo seed: created={created} existing={existing} (org {org_id})")
-    return {"organization_id": org_id, "created": created, "existing": existing}
+    return {
+        "organization_id": org_id,
+        "notice_document_id": document_id,
+        "created": created,
+        "existing": existing,
+    }
+
+
+async def _seed_ceo_demo_notice(
+    db: AsyncSession, org_id: str, authority_id: str, created: dict, existing: dict
+) -> str | None:
+    """
+    Upload the synthetic FMDA notice through the real document service and process it
+    through the real processing pipeline, rather than inserting the rows by hand -- the
+    demo is only meaningful if the document arrived the way a real upload does, with the
+    same sha256, storage key, audit event and version record.
+
+    Idempotency is the service's own per-tenant sha256 dedup: a rerun hashes identical
+    bytes, upload_and_create_document returns (existing_document, True), and nothing is
+    inserted. process_document is then skipped, because it is not itself idempotent -- it
+    would supersede the current version and add a second one for unchanged content.
+    """
+    source_id = (
+        await db.execute(
+            select(RegulatorySource.id).where(
+                RegulatorySource.authority_id == authority_id,
+                RegulatorySource.name == "Synthetic Regulatory Uploads",
+            )
+        )
+    ).scalars().first()
+    if source_id is None:
+        return None
+
+    document, is_duplicate = await upload_and_create_document(
+        db,
+        organization_id=org_id,
+        authority_id=authority_id,
+        source_id=source_id,
+        file_data=io.BytesIO(_ceo_demo_notice_body()),
+        file_name="FMDA-2026-041-SYN.txt",
+        content_type="text/plain",
+        title=CEO_DEMO_NOTICE_TITLE,
+        description=(
+            "Synthetic demo notice (FMDA-2026-041-SYN). Not a real regulation. Introduces "
+            "cybersecurity, post-market surveillance and software traceability "
+            "requirements REQ-001 through REQ-010."
+        ),
+        document_type=DocumentType.NOTICE.value,
+        jurisdiction="United States",
+        country="USA",
+    )
+    if is_duplicate:
+        existing["documents"] += 1
+        return document.id
+
+    created["documents"] += 1
+    # Set by hand because upload_and_create_document takes no date arguments: it describes
+    # the upload, not the notice. Written before process_document, which copies
+    # publication_date onto the version's published_at.
+    document.publication_date = datetime(2026, 10, 5, tzinfo=timezone.utc)
+    document.effective_date = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    await db.commit()
+
+    await process_document(document.id, db)
+    return document.id
