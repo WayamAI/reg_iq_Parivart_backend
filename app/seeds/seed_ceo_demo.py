@@ -17,6 +17,16 @@ from sqlalchemy.future import select
 
 from app.core.security import hash_password
 from app.models.organization import Organization
+from app.models.portfolio import (
+    Control,
+    ControlCategory,
+    ControlStatus,
+    Market,
+    MarketStatus,
+    Process,
+    Product,
+    ProductStatus,
+)
 from app.models.regulatory import (
     ConnectorType,
     RegulatoryAuthority,
@@ -122,6 +132,137 @@ CEO_DEMO_SOURCES = [
     },
 ]
 
+# country values follow demo_data.py's convention for the same five markets (USA/EU/UK/
+# IN/CA) so the two tenants describe the same jurisdictions the same way.
+CEO_DEMO_MARKETS = [
+    {"name": "United States", "country": "USA", "region": "North America", "regulatory_jurisdiction": "FMDA"},
+    {"name": "European Union", "country": "EU", "region": "Europe", "regulatory_jurisdiction": "EMDA"},
+    {"name": "United Kingdom", "country": "UK", "region": "Europe", "regulatory_jurisdiction": "UKDSA"},
+    {"name": "India", "country": "IN", "region": "Asia", "regulatory_jurisdiction": "IMDA"},
+    {"name": "Canada", "country": "CA", "region": "North America", "regulatory_jurisdiction": "CDA"},
+]
+
+# product_code is globally unique, not per-organization: the PROD-00N codes are distinct
+# from demo_data.py's APS-001/ACT-002/ANM-003/AVH-004/AIF-005.
+CEO_DEMO_PRODUCTS = [
+    {
+        "product_code": "PROD-001",
+        "name": "Asterion PulseSense",
+        "regulatory_class": "Class II",
+        "category": "Remote monitoring",
+        "sub_category": "Cybersecurity",
+        "description": "Connected pulse oximeter for remote patient monitoring, with a networked companion app.",
+    },
+    {
+        "product_code": "PROD-002",
+        "name": "Asterion CardioTrack",
+        "regulatory_class": "Class II",
+        "category": "Cardiac monitoring",
+        "sub_category": "Software updates",
+        "description": "Ambulatory cardiac monitor whose arrhythmia detection ships as field-updatable software.",
+    },
+    {
+        "product_code": "PROD-003",
+        "name": "Asterion NeoMonitor",
+        "regulatory_class": "Class II",
+        "category": "Neonatal monitoring",
+        "sub_category": "Safety",
+        "description": "Neonatal ICU monitoring system with alarm-safety-critical thresholds.",
+    },
+    {
+        "product_code": "PROD-004",
+        "name": "Asterion VitalHub",
+        "regulatory_class": "Class II",
+        "category": "Connected device gateway",
+        "sub_category": "Interoperability",
+        "description": "Ward gateway aggregating bedside device telemetry into the hospital network.",
+    },
+    {
+        "product_code": "PROD-005",
+        "name": "Asterion InfuFlow",
+        "regulatory_class": "Class III",
+        "category": "Infusion control",
+        "sub_category": "Software integrity",
+        "description": "Smart infusion pump whose dose-error-reduction software is safety critical.",
+    },
+]
+
+CEO_DEMO_PROCESSES = [
+    ("Product Design", "Engineering"),
+    ("Manufacturing", "Operations"),
+    ("Quality Assurance", "Quality"),
+    ("Labeling", "Regulatory Affairs"),
+    ("Packaging", "Operations"),
+    ("Regulatory Submission", "Regulatory Affairs"),
+    ("Post-Market Surveillance", "Quality"),
+    ("Clinical Evaluation", "Clinical"),
+    ("Risk Management", "Risk"),
+    ("Software Change Control", "Software Quality"),
+    ("CAPA", "Quality"),
+]
+
+# Each control hangs off the process that actually performs it. The two software controls
+# split: validation belongs to Software Change Control (it gates a release), while the
+# vulnerability assessment belongs to Risk Management (it feeds the risk file).
+CEO_DEMO_CONTROLS = [
+    {
+        "name": "Design Control",
+        "process": "Product Design",
+        "category": ControlCategory.QUALITY,
+        "owner": "Quality Manager",
+        "description": "Controls the design process so design inputs, outputs and transfers stay traceable.",
+    },
+    {
+        "name": "Supplier Quality Agreement",
+        "process": "Manufacturing",
+        "category": ControlCategory.MANUFACTURING,
+        "owner": "Procurement Lead",
+        "description": "Agreements holding suppliers to incoming material and component quality requirements.",
+    },
+    {
+        "name": "Labeling Review Process",
+        "process": "Labeling",
+        "category": ControlCategory.LABELING,
+        "owner": "Regulatory Affairs Lead",
+        "description": "Review and approval of product labeling and instructions for use before release.",
+    },
+    {
+        "name": "Software Validation Protocol",
+        "process": "Software Change Control",
+        "category": ControlCategory.QUALITY,
+        "owner": "Software Engineering Lead",
+        "description": "Validation evidence required before any device software change is released.",
+    },
+    {
+        "name": "Cybersecurity Vulnerability Assessment",
+        "process": "Risk Management",
+        "category": ControlCategory.CYBERSECURITY,
+        "owner": "Software Engineering Lead",
+        "description": "Assessment of known vulnerabilities in connected devices, feeding the risk management file.",
+    },
+    {
+        "name": "Post-Market Surveillance Review",
+        "process": "Post-Market Surveillance",
+        "category": ControlCategory.SAFETY,
+        "owner": "Quality Manager",
+        "description": "Periodic review of field complaints, incidents and trends for marketed devices.",
+    },
+    {
+        "name": "Risk Management File Review",
+        "process": "Risk Management",
+        "category": ControlCategory.RISK,
+        "owner": "Risk Management Lead",
+        "description": "Review keeping the risk management file current against the device's residual risks.",
+    },
+    {
+        "name": "CAPA Effectiveness Review",
+        "process": "CAPA",
+        "category": ControlCategory.QUALITY,
+        "owner": "Quality Manager",
+        "description": "Verification that corrective and preventive actions achieved their intended effect.",
+    },
+]
+
 
 async def _exists(db: AsyncSession, model, *conditions) -> bool:
     result = await db.execute(select(model.id).where(*conditions).limit(1))
@@ -135,7 +276,16 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
     Returns a summary of what was created versus what was already there, so a caller can
     report it honestly. Every "created" value is 0 on a second run.
     """
-    counters = ("organizations", "users", "authorities", "sources")
+    counters = (
+        "organizations",
+        "users",
+        "authorities",
+        "sources",
+        "markets",
+        "products",
+        "processes",
+        "controls",
+    )
     created = dict.fromkeys(counters, 0)
     existing = dict.fromkeys(counters, 0)
 
@@ -228,6 +378,86 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
             )
         )
         created["sources"] += 1
+
+    await db.flush()
+
+    # Markets, processes and controls are org-scoped with no unique column, so each batch
+    # is gated on the org having none yet -- the same all-or-nothing-per-batch rule
+    # demo_data.py uses, which keeps a renamed demo row from being silently re-created.
+    if await _exists(db, Market, Market.organization_id == org_id):
+        existing["markets"] += len(CEO_DEMO_MARKETS)
+    else:
+        for market_data in CEO_DEMO_MARKETS:
+            db.add(
+                Market(
+                    id=str(uuid.uuid4()),
+                    organization_id=org_id,
+                    status=MarketStatus.ACTIVE,
+                    **market_data,
+                )
+            )
+            created["markets"] += 1
+
+    # product_code is unique globally, so products can be keyed individually.
+    for product_data in CEO_DEMO_PRODUCTS:
+        if await _exists(db, Product, Product.product_code == product_data["product_code"]):
+            existing["products"] += 1
+            continue
+        db.add(
+            Product(
+                id=str(uuid.uuid4()),
+                organization_id=org_id,
+                status=ProductStatus.ACTIVE,
+                keywords=f"{product_data['name']}, {product_data['category']}, {product_data['sub_category']}",
+                **product_data,
+            )
+        )
+        created["products"] += 1
+
+    if await _exists(db, Process, Process.organization_id == org_id):
+        existing["processes"] += len(CEO_DEMO_PROCESSES)
+    else:
+        for name, category in CEO_DEMO_PROCESSES:
+            db.add(
+                Process(
+                    id=str(uuid.uuid4()),
+                    organization_id=org_id,
+                    name=name,
+                    description=f"Process for {name} in the medical device lifecycle.",
+                    category=category,
+                )
+            )
+            created["processes"] += 1
+    # Flushed before the controls: they carry process_id as a foreign key.
+    await db.flush()
+
+    if await _exists(db, Control, Control.organization_id == org_id):
+        existing["controls"] += len(CEO_DEMO_CONTROLS)
+    else:
+        # Re-queried by name for the same reason as the authorities above: on a run where
+        # the processes already existed, no in-memory object holds their ids.
+        process_ids = dict(
+            (
+                await db.execute(
+                    select(Process.name, Process.id).where(
+                        Process.organization_id == org_id
+                    )
+                )
+            ).all()
+        )
+        for control_data in CEO_DEMO_CONTROLS:
+            fields = {k: v for k, v in control_data.items() if k != "process"}
+            db.add(
+                Control(
+                    id=str(uuid.uuid4()),
+                    organization_id=org_id,
+                    product_id=None,
+                    process_id=process_ids[control_data["process"]],
+                    status=ControlStatus.ACTIVE,
+                    **fields,
+                )
+            )
+            created["controls"] += 1
 
     await db.flush()
     await db.commit()
