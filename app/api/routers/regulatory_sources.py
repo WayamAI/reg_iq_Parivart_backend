@@ -10,6 +10,7 @@ from app.db.database import get_db
 from app.ingestion.api_adapter import run_api_ingestion
 from app.ingestion.html_adapter import run_html_ingestion
 from app.ingestion.rss_ingestion import run_rss_ingestion
+from app.services.document_processing import process_document_background
 from app.models.regulatory import (
     RegulatoryAuthority,
     RegulatorySource,
@@ -152,6 +153,22 @@ async def run_source(
     adapter = adapters.get(source.source_type)
 
     if adapter is not None:
+        # Document ids already attached to this source/org before the run, so that
+        # a dedup hit (an existing id) is never mistaken for a newly ingested
+        # document and reprocessed. Adapters don't report which ids they created
+        # (RSS can create up to MAX_ENTRIES_PER_RUN per run, HTML/API at most one),
+        # so the before/after id-set diff below is the one place that needs to know.
+        existing_document_ids = set(
+            (
+                await db.execute(
+                    select(RegulatoryDocument.id).where(
+                        RegulatoryDocument.source_id == source_id,
+                        RegulatoryDocument.organization_id == current_user.organization_id,
+                    )
+                )
+            ).scalars().all()
+        )
+
         # Run synchronously within the request (bounded by the adapter's own entry
         # limits/timeouts) so the response already carries the real outcome, rather
         # than the client needing to poll a background task for a small, bounded
@@ -175,6 +192,27 @@ async def run_source(
             source.last_success_at = datetime.utcnow()
         if error:
             source.last_error = error
+
+        # Hand every newly created document to the same processing pipeline manual
+        # upload already uses (app/services/document_processing.py), via the same
+        # BackgroundTasks mechanism -- no second AI/processing path. A dedup hit
+        # (its id was already in existing_document_ids) is correctly skipped: it was
+        # processed, or is being processed, by whichever run created it.
+        if ingestion_status in ("COMPLETED", "PARTIAL"):
+            new_document_ids = (
+                (
+                    await db.execute(
+                        select(RegulatoryDocument.id).where(
+                            RegulatoryDocument.source_id == source_id,
+                            RegulatoryDocument.organization_id == current_user.organization_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for document_id in set(new_document_ids) - existing_document_ids:
+                background_tasks.add_task(process_document_background, document_id)
     else:
         # No adapter implemented for this source_type yet -- see
         # docs/ingestion/INGESTION_RUN_STATUS.md. The run is marked FAILED
