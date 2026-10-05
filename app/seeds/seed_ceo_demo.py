@@ -1147,6 +1147,76 @@ async def _seed_ceo_demo_assessments(
     return assessment_ids
 
 
+async def reanalyze_ceo_demo_assessments(db: AsyncSession) -> list[dict]:
+    """
+    One-off: re-run the matching engine for the CEO demo's three changes.
+
+    NOT called by seed_ceo_demo and deliberately not wired into it. The seed's job is to
+    be idempotent, and a reanalysis is the opposite: `analyze_change_impact` with
+    force_reanalyze=True inserts a *new* ImpactAssessment row at analysis_version + 1
+    every time it is called, with its own fresh ImpactItem rows. Running it on every seed
+    would stack a version per run and leave the reviews and actions seeded against
+    version 1 pointing further and further into the past.
+
+    It exists because the portfolio gained its ProductMarket rows after the assessments
+    had already been computed, so the committed version 1 results were produced against an
+    incomplete portfolio (zero PRODUCT items). This brings the dev database up to date
+    once. Invoke it by hand:
+
+        python -c "import asyncio; from app.db.database import AsyncSessionLocal; \
+            from app.seeds.seed_ceo_demo import reanalyze_ceo_demo_assessments; \
+            asyncio.run(...)"
+
+    Note what it does *not* do: the superseded assessments and their items are left in
+    place (the engine supersedes, it does not delete), so the existing ImpactReview and
+    Action rows keep valid foreign keys -- they simply describe version 1. Repointing them
+    at the new items is a separate decision, not this function's.
+    """
+    actor_id = (
+        await db.execute(
+            select(User.id).where(
+                User.email == "regulatory.analyst@asterion-parivart.example"
+            )
+        )
+    ).scalars().first()
+    org_id = (
+        await db.execute(
+            select(Organization.id).where(Organization.slug == CEO_DEMO_ORG_SLUG)
+        )
+    ).scalars().first()
+
+    # Taken from the assessments this tenant already has rather than from
+    # RegulatoryChange, which is not org-scoped (it hangs off the document).
+    change_ids = (
+        await db.execute(
+            select(ImpactAssessment.regulatory_change_id)
+            .where(ImpactAssessment.organization_id == org_id)
+            .distinct()
+            .order_by(ImpactAssessment.regulatory_change_id)
+        )
+    ).scalars().all()
+
+    results = []
+    for change_id in change_ids:
+        assessment = await MatchingEngineService.analyze_change_impact(
+            db,
+            organization_id=org_id,
+            regulatory_change_id=change_id,
+            force_reanalyze=True,
+            actor_id=actor_id,
+        )
+        results.append(
+            {
+                "regulatory_change_id": change_id,
+                "assessment_id": assessment.id,
+                "analysis_version": assessment.analysis_version,
+                "overall_impact_level": assessment.overall_impact_level.value,
+                "overall_confidence": assessment.overall_confidence,
+            }
+        )
+    return results
+
+
 # (change key, decision, reviewer email, notes). CHG-001's assessment is deliberately
 # absent: an unreviewed assessment is what the demo's review queue is for, and a tenant
 # where everything has already been signed off has nothing to show.
