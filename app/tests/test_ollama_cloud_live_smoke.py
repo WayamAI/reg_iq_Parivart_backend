@@ -20,6 +20,7 @@ import os
 import pytest
 
 from app.ai.providers.ollama_cloud_provider import OllamaCloudProvider
+from app.ai.schemas import DocumentSummary
 
 LIVE_KEY = os.environ.get("OLLAMA_API_KEY")
 OPTED_IN = os.environ.get("RUN_OLLAMA_CLOUD_LIVE_SMOKE") == "1"
@@ -49,5 +50,30 @@ async def test_live_generate_text_round_trip():
         )
         assert isinstance(text, str)
         assert len(text.strip()) > 0
+    finally:
+        await provider.aclose()
+
+
+async def test_live_generate_structured_output_round_trip():
+    """
+    AIService.analyze_document (the path source-ingestion dispatch now reaches, per
+    app/api/routers/regulatory_sources.py) uses generate_structured_output, not
+    generate_text -- the prior live smoke test above never exercised this path. Proves
+    only that a real schema-constrained request round-trips into a valid DocumentSummary
+    against the live service with this specific model.
+    """
+    provider = OllamaCloudProvider(api_key=LIVE_KEY, model=MODEL)
+    try:
+        result = await provider.generate_structured_output(
+            prompt=(
+                'Analyze this regulatory notice: "All manufacturers must label '
+                'devices with a new hazard warning by Q1 2027." Extract the '
+                "document type, jurisdiction, a one-sentence summary, and key topics."
+            ),
+            response_model=DocumentSummary,
+            system_prompt="You are a regulatory analyst. Extract structured information.",
+        )
+        assert isinstance(result, DocumentSummary)
+        assert result.summary.strip() != ""
     finally:
         await provider.aclose()
