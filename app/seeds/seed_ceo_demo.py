@@ -25,8 +25,15 @@ from app.models.intelligence import (
     RegulatoryChange,
     RegulatoryObligation,
 )
-from app.models.governance import ImpactReview, ReviewDecision
-from app.models.impact import ImpactAssessment
+from app.models.governance import (
+    Action,
+    ActionPriority,
+    ActionStatus,
+    Evidence,
+    ImpactReview,
+    ReviewDecision,
+)
+from app.models.impact import ImpactAssessment, ImpactItem
 from app.models.organization import Organization
 from app.models.portfolio import (
     Control,
@@ -48,6 +55,8 @@ from app.models.regulatory import (
 )
 from app.models.user import User, UserRole
 from app.matching.engine import MatchingEngineService
+from app.services.action_service import ActionService
+from app.services.evidence_service import EvidenceService
 from app.services.review_service import ReviewService
 from app.services.audit_service import (
     ENTITY_REGULATORY_CHANGE,
@@ -574,6 +583,8 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
     counters = (
         "assessments",
         "reviews",
+        "actions",
+        "evidence",
         "organizations",
         "users",
         "authorities",
@@ -825,6 +836,7 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
             db, org_id, change_ids, created, existing
         )
         await _seed_ceo_demo_reviews(db, org_id, assessment_ids, created, existing)
+        await _seed_ceo_demo_actions(db, org_id, assessment_ids, created, existing)
 
     print(f"CEO demo seed: created={created} existing={existing} (org {org_id})")
     return {
@@ -1152,3 +1164,210 @@ async def _seed_ceo_demo_reviews(
             notes=notes,
         )
         created["reviews"] += 1
+
+
+# (key, title, change key the impact item comes from, priority, owner email, due date,
+# target status, description, evidence filename, evidence state label).
+#
+# The title carries the ACT-00N prefix and is the idempotency key: Action has no natural
+# key of its own and no unique column, and the prefix is what survives a title that a demo
+# walkthrough might otherwise reword.
+#
+# Owners are the two of the four seeded users who would actually hold the work. The
+# dataset names a different owning department per action, and PARIVART has no department
+# model, so the department is stated in the description instead of being faked as a field:
+# the analyst (Daniel Rao) takes the Product Security, Regulatory Affairs and Software
+# Quality items, and the compliance manager (James Wilson) takes Risk Management,
+# Clinical & Safety and Quality.
+#
+# The evidence state label (PENDING / IN_PROGRESS / VERIFIED) is written into the file body
+# rather than into a column, because Evidence has no state column -- an attachment is
+# either recorded or it is not. Inventing a column's worth of meaning in a description
+# field would be worse than putting it in the document it describes.
+CEO_DEMO_ACTIONS = [
+    (
+        "ACT-001",
+        "Update cybersecurity vulnerability assessment procedure",
+        "CHG-001", ActionPriority.HIGH, "regulatory.analyst@asterion-parivart.example",
+        datetime(2026, 11, 15, tzinfo=timezone.utc), ActionStatus.IN_PROGRESS,
+        "Owning department: Product Security. Procedure updated; awaiting QA approval.",
+        "cybersecurity-assessment-record.txt", "IN_PROGRESS",
+    ),
+    (
+        "ACT-002",
+        "Review PulseSense and CardioTrack risk-management files",
+        "CHG-001", ActionPriority.HIGH, "quality.lead@asterion-parivart.example",
+        datetime(2026, 11, 20, tzinfo=timezone.utc), ActionStatus.OPEN,
+        "Owning department: Risk Management.",
+        "risk-management-review-signoff.txt", "PENDING",
+    ),
+    (
+        "ACT-003",
+        "Update quarterly PMS review checklist",
+        "CHG-002", ActionPriority.MEDIUM, "quality.lead@asterion-parivart.example",
+        datetime(2026, 11, 1, tzinfo=timezone.utc), ActionStatus.COMPLETED,
+        "Owning department: Clinical & Safety. Checklist updated and approved.",
+        "pms-procedure-update.txt", "VERIFIED",
+    ),
+    (
+        "ACT-004",
+        "Verify labeling and e-labeling consistency",
+        "CHG-003", ActionPriority.MEDIUM, "regulatory.analyst@asterion-parivart.example",
+        datetime(2026, 11, 30, tzinfo=timezone.utc), ActionStatus.OPEN,
+        "Owning department: Regulatory Affairs.",
+        "labeling-review-approval.txt", "PENDING",
+    ),
+    (
+        "ACT-005",
+        "Implement software-change-to-CAPA traceability checklist",
+        "CHG-001", ActionPriority.HIGH, "regulatory.analyst@asterion-parivart.example",
+        datetime(2026, 11, 25, tzinfo=timezone.utc), ActionStatus.IN_PROGRESS,
+        "Owning department: Software Quality. Traceability template drafted and under QA "
+        "review.",
+        "software-change-capa-traceability.txt", "IN_PROGRESS",
+    ),
+    (
+        "ACT-006",
+        "Review control effectiveness evidence",
+        "CHG-003", ActionPriority.MEDIUM, "quality.lead@asterion-parivart.example",
+        datetime(2026, 12, 5, tzinfo=timezone.utc), ActionStatus.OPEN,
+        "Owning department: Quality.",
+        "control-effectiveness-review.txt", "PENDING",
+    ),
+]
+
+
+def _ceo_demo_evidence_body(key: str, action_title: str, state: str) -> bytes:
+    """The evidence file's actual bytes, banner first for the same reason as the notice."""
+    return (
+        "\n".join(
+            [
+                "PARIVART DEMO DATA — SYNTHETIC / NON-PRODUCTION. This is not a real "
+                "compliance record.",
+                "",
+                f"Evidence ID: {key}",
+                f"Action: {action_title}",
+                f"Verification state: {state}",
+                "",
+                "Synthetic placeholder standing in for the document a real remediation "
+                "would attach. Evidence has no state column in PARIVART, so the state "
+                "above is part of this record's text, not a field the application reads.",
+            ]
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+async def _seed_ceo_demo_actions(
+    db: AsyncSession,
+    org_id: str,
+    assessment_ids: dict[str, str],
+    created: dict,
+    existing: dict,
+) -> None:
+    """
+    Six remediation actions and one evidence file each, through ActionService and
+    EvidenceService.
+
+    An action is always created OPEN -- ActionService owns the status field and offers no
+    way to create a row in any other state -- so anything else is reached by a real
+    transition afterwards, which is also what puts the move in the audit trail and sets
+    completed_at on the one completed action.
+
+    Each action hangs off an impact item from its change's assessment, picked as the
+    lowest item id so a rerun that somehow had to re-create an action would pick the same
+    one. The item is what makes the chain evidence -> action -> impact -> change ->
+    document walkable in the demo.
+    """
+    user_ids = dict(
+        (
+            await db.execute(
+                select(User.email, User.id).where(User.organization_id == org_id)
+            )
+        ).all()
+    )
+
+    # One query per assessment rather than per action: three assessments, six actions.
+    first_item: dict[str, str | None] = {}
+    for key, assessment_id in assessment_ids.items():
+        first_item[key] = (
+            await db.execute(
+                select(ImpactItem.id)
+                .where(ImpactItem.impact_assessment_id == assessment_id)
+                .order_by(ImpactItem.id)
+                .limit(1)
+            )
+        ).scalars().first()
+
+    for (
+        key, title, change_key, priority, owner_email, due_date, target_status,
+        description, evidence_filename, evidence_state,
+    ) in CEO_DEMO_ACTIONS:
+        full_title = f"{key}: {title}"
+        action = (
+            await db.execute(
+                select(Action).where(
+                    Action.organization_id == org_id,
+                    Action.title.startswith(f"{key}: "),
+                )
+            )
+        ).scalars().first()
+
+        if action is None:
+            owner_id = user_ids[owner_email]
+            action = await ActionService.create_action(
+                db,
+                organization_id=org_id,
+                title=full_title,
+                description=description,
+                owner_id=owner_id,
+                impact_item_id=first_item.get(change_key),
+                priority=priority,
+                due_date=due_date,
+                actor_id=owner_id,
+            )
+            created["actions"] += 1
+            if target_status is not ActionStatus.OPEN:
+                # Walked one step at a time: OPEN -> IN_PROGRESS -> COMPLETED is two
+                # declared transitions, and jumping straight to COMPLETED would record a
+                # history the work did not have.
+                for step in (ActionStatus.IN_PROGRESS, target_status):
+                    if step is not action.status:
+                        action = await ActionService.transition_status(
+                            db,
+                            organization_id=org_id,
+                            action_id=action.id,
+                            new_status=step,
+                            actor_id=owner_id,
+                        )
+        else:
+            existing["actions"] += 1
+
+        if await _exists(
+            db, Evidence,
+            Evidence.action_id == action.id,
+            Evidence.filename == evidence_filename,
+        ):
+            existing["evidence"] += 1
+            continue
+
+        await EvidenceService.attach(
+            db,
+            organization_id=org_id,
+            action_id=action.id,
+            file_data=io.BytesIO(
+                _ceo_demo_evidence_body(
+                    f"EVD-{key.removeprefix('ACT-')}", full_title, evidence_state
+                )
+            ),
+            file_name=evidence_filename,
+            content_type="text/plain",
+            description=(
+                f"Synthetic evidence for {key} ({title}). Verification state: "
+                f"{evidence_state}."
+            ),
+            # The owner, not a fixed uploader: the person doing the work is who files
+            # what they did, and this is also the uploaded_by the demo shows.
+            actor_id=action.owner_id,
+        )
+        created["evidence"] += 1
