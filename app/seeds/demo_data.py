@@ -79,6 +79,21 @@ async def seed_demo_data(db: AsyncSession):
     )
     if not await _exists(db, User, User.email == analyst_user.email):
         db.add(analyst_user)
+
+    # Platform demo login used by the frontend's own demo-credentials flow, distinct from
+    # the per-org admin@asterion.com account above. Same org, same hashing, own entry so it
+    # survives independently of the asterion.com accounts.
+    wayam_admin = User(
+        id=str(uuid.uuid4()),
+        organization_id=org_id,
+        name="Wayam Admin",
+        email="admin@wayam.ai",
+        password_hash=hash_password("1234567890"),
+        role=UserRole.ADMIN,
+        is_active=True,
+    )
+    if not await _exists(db, User, User.email == wayam_admin.email):
+        db.add(wayam_admin)
     await db.flush()
 
     # Create markets for the demo organization
