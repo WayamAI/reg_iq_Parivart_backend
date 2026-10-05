@@ -18,7 +18,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.core.security import hash_password
-from app.models.document import DocumentType
+from app.models.document import DocumentType, RegulatoryVersion
+from app.models.intelligence import (
+    ChangeType,
+    ObligationCategory,
+    RegulatoryChange,
+    RegulatoryObligation,
+)
 from app.models.organization import Organization
 from app.models.portfolio import (
     Control,
@@ -39,6 +45,13 @@ from app.models.regulatory import (
     SourceType,
 )
 from app.models.user import User, UserRole
+from app.services.audit_service import (
+    ENTITY_REGULATORY_CHANGE,
+    ENTITY_REGULATORY_OBLIGATION,
+    EVENT_OBLIGATION_CREATED,
+    EVENT_REGULATORY_CHANGE_CREATED,
+    AuditService,
+)
 from app.services.document_processing import process_document
 from app.services.document_service import upload_and_create_document
 
@@ -342,6 +355,149 @@ CEO_DEMO_NOTICE_CLAUSES = [
 ]
 
 
+# The three changes the notice introduces, grouped by subject rather than one per clause:
+# a change is the unit a reviewer assesses, and the ten clauses genuinely cluster into
+# three themes. Keyed on (document_id, summary).
+#
+# No confidence, prompt_version or ai_model on any row here, deliberately and by
+# omission rather than by writing a placeholder: these rows are hand-authored seed data,
+# and a non-NULL ai_model would claim an AI extraction that never ran.
+CEO_DEMO_CHANGES = [
+    {
+        "key": "CHG-001",
+        "section": "REQ-002, REQ-003, REQ-008, REQ-009 — Cybersecurity and Software Traceability",
+        "change_type": ChangeType.NEW_REQUIREMENT,
+        "summary": "Enhanced Cybersecurity and Software Traceability Requirements",
+        "new_text": (
+            "A documented cybersecurity vulnerability assessment must be completed within "
+            "10 business days of identifying a material vulnerability (REQ-002); records "
+            "of testing, approval, release and deployment of safety-relevant software "
+            "updates must be retained (REQ-003); each safety-relevant software change must "
+            "be traceable across product version, change record, risk assessment, "
+            "validation evidence and any resulting CAPA (REQ-008); and material "
+            "vulnerabilities must carry documented remediation or risk-acceptance "
+            "decisions with verification evidence and owner approval (REQ-009)."
+        ),
+        "source_reference": "FMDA-2026-041-SYN REQ-002, REQ-003, REQ-008, REQ-009",
+    },
+    {
+        "key": "CHG-002",
+        "section": "REQ-001, REQ-006 — Post-Market Surveillance and Safety Escalation",
+        "change_type": ChangeType.NEW_REQUIREMENT,
+        "summary": "Expanded Post-Market Surveillance and Safety Escalation",
+        "new_text": (
+            "A post-market surveillance review must be performed and documented for each "
+            "covered connected device at least once every calendar quarter (REQ-001), and "
+            "a confirmed reportable safety incident must be escalated to the responsible "
+            "regulatory and safety functions within two business days of confirmation "
+            "(REQ-006)."
+        ),
+        "source_reference": "FMDA-2026-041-SYN REQ-001, REQ-006",
+    },
+    {
+        "key": "CHG-003",
+        "section": "REQ-005, REQ-007, REQ-010 — Quality Records and Labeling",
+        "change_type": ChangeType.NEW_REQUIREMENT,
+        "summary": "Strengthened Quality Record and Labeling Controls",
+        "new_text": (
+            "Product labeling, electronic labeling and user instructions must stay "
+            "consistent with the approved product configuration and identified safety "
+            "controls (REQ-005); supporting records must be retained for at least seven "
+            "years (REQ-007); and the controls managing cybersecurity, software validation "
+            "and post-market surveillance must be reviewed periodically for effectiveness "
+            "with deficiencies assigned for remediation (REQ-010)."
+        ),
+        "source_reference": "FMDA-2026-041-SYN REQ-005, REQ-007, REQ-010",
+    },
+]
+
+# effective_date splits on what the notice itself allows. An obligation that is triggered
+# by an event -- a vulnerability found, an incident confirmed, a release cut, a record
+# created -- has to be met from the effective date itself, 01 Jan 2027, because the
+# trigger can happen that day. An obligation that is a programme to stand up or a cycle to
+# run -- the quarterly review, the traceability matrix, the labeling reconciliation, the
+# periodic effectiveness review -- is given the 30 Jun 2027 transition deadline, the date
+# the notice sets for full demonstrated compliance.
+CEO_DEMO_OBLIGATION_IMMEDIATE = datetime(2027, 1, 1, tzinfo=timezone.utc)
+CEO_DEMO_OBLIGATION_TRANSITION = datetime(2027, 6, 30, tzinfo=timezone.utc)
+
+# (key, change key, text, category, applicability, source_section, effective_date).
+# Keyed on (change_id, text).
+CEO_DEMO_OBLIGATIONS = [
+    (
+        "OBL-001", "CHG-002",
+        "Perform quarterly post-market surveillance review",
+        ObligationCategory.POST_MARKET,
+        "All covered connected and software-enabled devices on the market.",
+        "REQ-001", CEO_DEMO_OBLIGATION_TRANSITION,
+    ),
+    (
+        "OBL-002", "CHG-001",
+        "Complete material cybersecurity vulnerability assessment within 10 business days",
+        ObligationCategory.CYBERSECURITY,
+        "Connected and networked devices, including companion apps and ward gateways.",
+        "REQ-002", CEO_DEMO_OBLIGATION_IMMEDIATE,
+    ),
+    (
+        "OBL-003", "CHG-001",
+        "Retain software update release and validation evidence",
+        ObligationCategory.RECORDKEEPING,
+        "Devices with field-updatable or safety-relevant software.",
+        "REQ-003", CEO_DEMO_OBLIGATION_IMMEDIATE,
+    ),
+    (
+        "OBL-004", "CHG-001",
+        "Review risk-management file after qualifying software or safety event",
+        ObligationCategory.SAFETY,
+        "All covered devices, on a safety-relevant software change, material "
+        "cybersecurity finding or significant post-market signal.",
+        "REQ-004", CEO_DEMO_OBLIGATION_IMMEDIATE,
+    ),
+    (
+        "OBL-005", "CHG-003",
+        "Maintain labeling and electronic instructions consistency",
+        ObligationCategory.LABELING,
+        "All marketed devices, including electronic labeling and instructions for use.",
+        "REQ-005", CEO_DEMO_OBLIGATION_TRANSITION,
+    ),
+    (
+        "OBL-006", "CHG-002",
+        "Escalate confirmed reportable safety incidents within two business days",
+        ObligationCategory.REPORTING,
+        "All covered devices once an incident is confirmed reportable.",
+        "REQ-006", CEO_DEMO_OBLIGATION_IMMEDIATE,
+    ),
+    (
+        "OBL-007", "CHG-003",
+        "Retain supporting records for at least seven years",
+        ObligationCategory.RECORDKEEPING,
+        "All records supporting compliance with this notice, across every covered device.",
+        "REQ-007", CEO_DEMO_OBLIGATION_IMMEDIATE,
+    ),
+    (
+        "OBL-008", "CHG-001",
+        "Maintain product-version-to-CAPA traceability",
+        ObligationCategory.QUALITY,
+        "Software-enabled and connected products with safety-relevant software changes.",
+        "REQ-008", CEO_DEMO_OBLIGATION_TRANSITION,
+    ),
+    (
+        "OBL-009", "CHG-001",
+        "Document vulnerability remediation or risk acceptance",
+        ObligationCategory.CYBERSECURITY,
+        "Connected devices with a material cybersecurity vulnerability identified.",
+        "REQ-009", CEO_DEMO_OBLIGATION_IMMEDIATE,
+    ),
+    (
+        "OBL-010", "CHG-003",
+        "Review cybersecurity, validation and PMS control effectiveness",
+        ObligationCategory.QUALITY,
+        "The quality system controls covering all connected and software-enabled devices.",
+        "REQ-010", CEO_DEMO_OBLIGATION_TRANSITION,
+    ),
+]
+
+
 def _ceo_demo_notice_body() -> bytes:
     """
     The uploaded file's actual bytes. text/plain, because that is what
@@ -422,6 +578,8 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
         "controls",
         "registrations",
         "documents",
+        "changes",
+        "obligations",
     )
     created = dict.fromkeys(counters, 0)
     existing = dict.fromkeys(counters, 0)
@@ -652,6 +810,9 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
 
     document_id = await _seed_ceo_demo_notice(db, org_id, authority_ids["FMDA"], created, existing)
 
+    if document_id is not None:
+        await _seed_ceo_demo_intelligence(db, org_id, document_id, created, existing)
+
     print(f"CEO demo seed: created={created} existing={existing} (org {org_id})")
     return {
         "organization_id": org_id,
@@ -718,3 +879,139 @@ async def _seed_ceo_demo_notice(
 
     await process_document(document.id, db)
     return document.id
+
+
+async def _seed_ceo_demo_intelligence(
+    db: AsyncSession, org_id: str, document_id: str, created: dict, existing: dict
+) -> None:
+    """
+    The three regulatory changes and ten obligations the notice introduces, written as
+    plain ORM rows.
+
+    These are *not* AI output. AI enrichment never ran for this document -- the provider
+    registry is only wired at FastAPI startup, so `AIService()` has no providers in a
+    seed script -- so `ai_model`, `prompt_version` and `confidence` are left unset rather
+    than filled with a plausible-looking model name. A seeded row that claims an
+    extraction that never happened would make every provenance field in the demo
+    worthless.
+
+    The audit events are written in this same unit of work, only on the insert path: a
+    rerun that creates nothing must also claim nothing, or the trail would record one
+    creation per seed run.
+    """
+    version_id = (
+        await db.execute(
+            select(RegulatoryVersion.id).where(
+                RegulatoryVersion.document_id == document_id,
+                RegulatoryVersion.is_current.is_(True),
+            )
+        )
+    ).scalars().first()
+
+    # The analyst, because in the real product this is who works a parsed notice into
+    # changes and obligations.
+    actor_id = (
+        await db.execute(
+            select(User.id).where(
+                User.email == "regulatory.analyst@asterion-parivart.example"
+            )
+        )
+    ).scalars().first()
+
+    change_ids: dict[str, str] = {}
+    for change_data in CEO_DEMO_CHANGES:
+        key = change_data["key"]
+        fields = {k: v for k, v in change_data.items() if k != "key"}
+        existing_id = (
+            await db.execute(
+                select(RegulatoryChange.id).where(
+                    RegulatoryChange.document_id == document_id,
+                    RegulatoryChange.summary == fields["summary"],
+                )
+            )
+        ).scalars().first()
+        if existing_id is not None:
+            change_ids[key] = existing_id
+            existing["changes"] += 1
+            continue
+
+        change_id = str(uuid.uuid4())
+        db.add(
+            RegulatoryChange(
+                id=change_id,
+                document_id=document_id,
+                version_id=version_id,
+                **fields,
+            )
+        )
+        change_ids[key] = change_id
+        created["changes"] += 1
+        AuditService.record(
+            db,
+            organization_id=org_id,
+            actor_id=actor_id,
+            event_type=EVENT_REGULATORY_CHANGE_CREATED,
+            entity_type=ENTITY_REGULATORY_CHANGE,
+            entity_id=change_id,
+            payload={
+                "change_id": change_id,
+                "document_id": document_id,
+                "summary": fields["summary"],
+                "change_type": fields["change_type"].value,
+                "source_reference": fields["source_reference"],
+                "source": "ceo_demo_seed",
+            },
+        )
+
+    # Flushed so the obligations' change_id foreign keys point at rows the database has.
+    await db.flush()
+
+    for (
+        key, change_key, text, category, applicability, source_section, effective_date
+    ) in CEO_DEMO_OBLIGATIONS:
+        change_id = change_ids[change_key]
+        if await _exists(
+            db, RegulatoryObligation,
+            RegulatoryObligation.change_id == change_id,
+            RegulatoryObligation.text == text,
+        ):
+            existing["obligations"] += 1
+            continue
+
+        obligation_id = str(uuid.uuid4())
+        db.add(
+            RegulatoryObligation(
+                id=obligation_id,
+                change_id=change_id,
+                document_id=document_id,
+                text=text,
+                category=category,
+                applicability=applicability,
+                # The notice is a United States (synthetic) instrument; every obligation
+                # in it is US-scoped, so none is left without a jurisdiction.
+                jurisdiction="United States",
+                effective_date=effective_date,
+                source_section=source_section,
+            )
+        )
+        created["obligations"] += 1
+        AuditService.record(
+            db,
+            organization_id=org_id,
+            actor_id=actor_id,
+            event_type=EVENT_OBLIGATION_CREATED,
+            entity_type=ENTITY_REGULATORY_OBLIGATION,
+            entity_id=obligation_id,
+            payload={
+                "obligation_id": obligation_id,
+                "change_id": change_id,
+                "document_id": document_id,
+                "text": text,
+                "category": category.value,
+                "source_section": source_section,
+                "seed_key": key,
+                "source": "ceo_demo_seed",
+            },
+        )
+
+    await db.commit()
