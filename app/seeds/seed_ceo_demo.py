@@ -43,6 +43,7 @@ from app.models.portfolio import (
     MarketStatus,
     Process,
     Product,
+    ProductMarket,
     ProductStatus,
     Registration,
     RegistrationStatus,
@@ -594,6 +595,7 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
         "processes",
         "controls",
         "registrations",
+        "product_markets",
         "documents",
         "changes",
         "obligations",
@@ -825,6 +827,8 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
     await db.flush()
     await db.commit()
 
+    await _seed_ceo_demo_product_markets(db, org_id, created, existing)
+
     document_id = await _seed_ceo_demo_notice(db, org_id, authority_ids["FMDA"], created, existing)
 
     change_ids: dict[str, str] = {}
@@ -845,6 +849,52 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
         "created": created,
         "existing": existing,
     }
+
+
+async def _seed_ceo_demo_product_markets(
+    db: AsyncSession, org_id: str, created: dict, existing: dict
+) -> None:
+    """
+    Link each product to the markets it is registered in, through ProductMarket.
+
+    The registrations above already establish which (product, market) pairs are real for
+    this tenant, but the matching engine reaches products *only* by iterating
+    ProductMarket (app/matching/engine.py step 2). Without these rows a portfolio with
+    twelve registrations still yields zero PRODUCT impact items, and the "a control guards
+    a matched product" evidence axis never fires either. One row per existing Registration
+    is therefore derived from the registrations rather than re-declared, so the two views
+    of the portfolio cannot drift apart.
+
+    Keyed on (product_id, market_id), the same natural key the registrations use.
+    """
+    registrations = (
+        await db.execute(
+            select(Registration).where(Registration.organization_id == org_id)
+        )
+    ).scalars().all()
+
+    for registration in registrations:
+        if await _exists(
+            db, ProductMarket,
+            ProductMarket.product_id == registration.product_id,
+            ProductMarket.market_id == registration.market_id,
+        ):
+            existing["product_markets"] += 1
+            continue
+        db.add(
+            ProductMarket(
+                id=str(uuid.uuid4()),
+                product_id=registration.product_id,
+                market_id=registration.market_id,
+                status=MarketStatus.ACTIVE,
+                launch_date=CEO_DEMO_REGISTRATION_VALID_FROM,
+                registration_status=registration.status.value,
+                registration_reference=registration.registration_number,
+            )
+        )
+        created["product_markets"] += 1
+
+    await db.commit()
 
 
 async def _seed_ceo_demo_notice(
