@@ -11,6 +11,7 @@ key before insert, so a second run creates nothing and the ids stay stable.
 """
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -26,6 +27,8 @@ from app.models.portfolio import (
     Process,
     Product,
     ProductStatus,
+    Registration,
+    RegistrationStatus,
 )
 from app.models.regulatory import (
     ConnectorType,
@@ -264,6 +267,30 @@ CEO_DEMO_CONTROLS = [
 ]
 
 
+# (dataset registration id, product name, market name, expiry). Deliberately uneven
+# coverage -- a portfolio registered everywhere makes impact analysis look trivial. The
+# authority is not listed: it is the market's own regulatory_jurisdiction above, which for
+# this tenant already *is* the synthetic authority short_name (FMDA/EMDA/UKDSA/IMDA/CDA).
+CEO_DEMO_REGISTRATIONS = [
+    ("REG-001", "Asterion PulseSense", "United States", (2028, 3, 31)),
+    ("REG-002", "Asterion PulseSense", "European Union", (2028, 6, 30)),
+    ("REG-003", "Asterion CardioTrack", "United States", (2028, 2, 28)),
+    ("REG-004", "Asterion CardioTrack", "European Union", (2028, 5, 31)),
+    ("REG-005", "Asterion NeoMonitor", "United States", (2027, 12, 31)),
+    ("REG-006", "Asterion NeoMonitor", "European Union", (2028, 1, 31)),
+    ("REG-007", "Asterion VitalHub", "United States", (2028, 4, 30)),
+    ("REG-008", "Asterion VitalHub", "United Kingdom", (2028, 7, 31)),
+    ("REG-009", "Asterion InfuFlow", "United States", (2029, 1, 31)),
+    ("REG-010", "Asterion InfuFlow", "European Union", (2029, 2, 28)),
+    ("REG-011", "Asterion InfuFlow", "India", (2028, 11, 30)),
+    ("REG-012", "Asterion PulseSense", "Canada", (2028, 9, 30)),
+]
+
+# Before the notice's 05 Oct 2026 publication date, so every registration is already in
+# force when the demo narrative's regulatory change lands.
+CEO_DEMO_REGISTRATION_VALID_FROM = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+
 async def _exists(db: AsyncSession, model, *conditions) -> bool:
     result = await db.execute(select(model.id).where(*conditions).limit(1))
     return result.scalars().first() is not None
@@ -285,6 +312,7 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
         "products",
         "processes",
         "controls",
+        "registrations",
     )
     created = dict.fromkeys(counters, 0)
     existing = dict.fromkeys(counters, 0)
@@ -458,6 +486,57 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
                 )
             )
             created["controls"] += 1
+
+    # Flushed before the registrations: they carry product_id and market_id.
+    await db.flush()
+
+    # Re-queried by natural key for the same reason as the authorities above: on a run
+    # where the products and markets already existed, no in-memory object holds their ids.
+    product_ids = dict(
+        (
+            await db.execute(
+                select(Product.name, Product.id).where(Product.organization_id == org_id)
+            )
+        ).all()
+    )
+    market_rows = (
+        await db.execute(
+            select(Market.name, Market.id, Market.regulatory_jurisdiction).where(
+                Market.organization_id == org_id
+            )
+        )
+    ).all()
+    markets_by_name = {name: (mid, jur) for name, mid, jur in market_rows}
+
+    for reg_id, product_name, market_name, expiry in CEO_DEMO_REGISTRATIONS:
+        product_id = product_ids.get(product_name)
+        market = markets_by_name.get(market_name)
+        if product_id is None or market is None:
+            continue
+        market_id, jurisdiction = market
+        # Keyed on (product_id, market_id) like demo_data.py: one registration per
+        # product per market, so a rerun re-finds it instead of inserting a twin.
+        if await _exists(
+            db, Registration,
+            Registration.product_id == product_id,
+            Registration.market_id == market_id,
+        ):
+            existing["registrations"] += 1
+            continue
+        db.add(
+            Registration(
+                id=str(uuid.uuid4()),
+                organization_id=org_id,
+                product_id=product_id,
+                market_id=market_id,
+                authority_id=authority_ids.get(jurisdiction),
+                registration_number=f"{jurisdiction}-{reg_id}",
+                status=RegistrationStatus.ACTIVE,
+                valid_from=CEO_DEMO_REGISTRATION_VALID_FROM,
+                valid_until=datetime(*expiry, tzinfo=timezone.utc),
+            )
+        )
+        created["registrations"] += 1
 
     await db.flush()
     await db.commit()
