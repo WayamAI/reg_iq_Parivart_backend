@@ -25,6 +25,7 @@ from app.models.intelligence import (
     RegulatoryChange,
     RegulatoryObligation,
 )
+from app.models.governance import ImpactReview, ReviewDecision
 from app.models.impact import ImpactAssessment
 from app.models.organization import Organization
 from app.models.portfolio import (
@@ -47,6 +48,7 @@ from app.models.regulatory import (
 )
 from app.models.user import User, UserRole
 from app.matching.engine import MatchingEngineService
+from app.services.review_service import ReviewService
 from app.services.audit_service import (
     ENTITY_REGULATORY_CHANGE,
     ENTITY_REGULATORY_OBLIGATION,
@@ -571,6 +573,7 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
     """
     counters = (
         "assessments",
+        "reviews",
         "organizations",
         "users",
         "authorities",
@@ -818,7 +821,10 @@ async def seed_ceo_demo(db: AsyncSession) -> dict:
         change_ids = await _seed_ceo_demo_intelligence(
             db, org_id, document_id, created, existing
         )
-        await _seed_ceo_demo_assessments(db, org_id, change_ids, created, existing)
+        assessment_ids = await _seed_ceo_demo_assessments(
+            db, org_id, change_ids, created, existing
+        )
+        await _seed_ceo_demo_reviews(db, org_id, assessment_ids, created, existing)
 
     print(f"CEO demo seed: created={created} existing={existing} (org {org_id})")
     return {
@@ -1077,3 +1083,72 @@ async def _seed_ceo_demo_assessments(
         created["assessments"] += 1
 
     return assessment_ids
+
+
+# (change key, decision, reviewer email, notes). CHG-001's assessment is deliberately
+# absent: an unreviewed assessment is what the demo's review queue is for, and a tenant
+# where everything has already been signed off has nothing to show.
+#
+# Both decisions are ACCEPT. The second reads as "accepted with modification" in its note
+# but is not filed as MODIFY, because the reviewer did not modify the engine's finding --
+# they accepted it and expressed a priority for the remediation that follows.
+CEO_DEMO_REVIEWS = [
+    (
+        "CHG-002",
+        ReviewDecision.ACCEPT,
+        "regulatory.reviewer@asterion-parivart.example",
+        "Accepted. PMS and safety escalation process updates are required for the "
+        "covered portfolio.",
+    ),
+    (
+        "CHG-003",
+        ReviewDecision.ACCEPT,
+        "regulatory.reviewer@asterion-parivart.example",
+        "Accepted with modification: prioritize labeling change control for products "
+        "with electronic instructions.",
+    ),
+]
+
+
+async def _seed_ceo_demo_reviews(
+    db: AsyncSession,
+    org_id: str,
+    assessment_ids: dict[str, str],
+    created: dict,
+    existing: dict,
+) -> None:
+    """
+    Two human review decisions, filed through ReviewService so each one moves its
+    assessment's status and writes the review row and the audit event in one unit of work.
+
+    Keyed on impact_assessment_id: a rerun finds the existing review and files nothing,
+    which matters more here than elsewhere because ImpactReview is append-only -- a second
+    create would not overwrite the first, it would add a second decision to the trail.
+    """
+    reviewer_ids = dict(
+        (
+            await db.execute(
+                select(User.email, User.id).where(User.organization_id == org_id)
+            )
+        ).all()
+    )
+
+    for change_key, decision, reviewer_email, notes in CEO_DEMO_REVIEWS:
+        assessment_id = assessment_ids.get(change_key)
+        if assessment_id is None:
+            continue
+        if await _exists(
+            db, ImpactReview, ImpactReview.impact_assessment_id == assessment_id
+        ):
+            existing["reviews"] += 1
+            continue
+
+        await ReviewService.create_review(
+            db,
+            organization_id=org_id,
+            impact_assessment_id=assessment_id,
+            reviewer_id=reviewer_ids[reviewer_email],
+            decision=decision,
+            notes=notes,
+        )
+        created["reviews"] += 1
