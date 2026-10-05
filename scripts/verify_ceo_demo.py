@@ -279,7 +279,32 @@ async def verify() -> bool:
         report.count(
             "reviews",
             await _count(db, ImpactReview, ImpactReview.organization_id == org_id),
-            2,
+            4,
+        )
+        # Reviews are append-only, so the count alone cannot say whether the *current*
+        # analysis has been signed off. Checked instead: of the latest version per change,
+        # exactly one is unreviewed. That one is the demo's review queue -- a tenant where
+        # everything is already accepted has nothing to show -- and anything else means
+        # either a reanalysis left an accepted finding stranded behind a newer one, or the
+        # queue is empty.
+        latest = {}
+        for a in assessments:
+            if a.analysis_version >= getattr(
+                latest.get(a.regulatory_change_id), "analysis_version", 0
+            ):
+                latest[a.regulatory_change_id] = a
+        unreviewed = [
+            a for a in latest.values()
+            if not await _count(
+                db, ImpactReview, ImpactReview.impact_assessment_id == a.id
+            )
+        ]
+        report.check(
+            "latest assessment reviewed (1 left in queue)",
+            len(unreviewed) == 1,
+            f"{len(latest) - len(unreviewed)}/{len(latest)} reviewed, queue: "
+            + (", ".join(f"v{a.analysis_version} {a.regulatory_change_id[:8]}"
+                         for a in unreviewed) or "empty"),
         )
 
         actions = (
@@ -312,6 +337,29 @@ async def verify() -> bool:
             "action -> impact_item intact",
             not dangling,
             "all resolve" if not dangling else f"dangling: {dangling}",
+        )
+        # Stronger than "intact": the item must belong to the latest assessment for its
+        # change. A superseded item is still a valid foreign key, so the check above passes
+        # on an action nobody can reach from the assessment the application displays.
+        latest_item_ids = set()
+        for a in latest.values():
+            latest_item_ids.update(
+                (
+                    await db.execute(
+                        select(ImpactItem.id).where(
+                            ImpactItem.impact_assessment_id == a.id
+                        )
+                    )
+                ).scalars().all()
+            )
+        stale = [
+            a.title.split(":")[0] for a in actions
+            if a.impact_item_id and a.impact_item_id not in latest_item_ids
+        ]
+        report.check(
+            "action -> latest-version impact_item",
+            not stale,
+            "all on current analysis" if not stale else f"superseded: {sorted(stale)}",
         )
 
         print("\naudit trail")

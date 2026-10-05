@@ -1108,6 +1108,14 @@ async def _seed_ceo_demo_assessments(
     is itself idempotent without force_reanalyze, but it only knows that *after* loading
     the portfolio and the obligations; skipping the call outright on a rerun is cheaper and
     makes the created/existing counters honest without inferring them from the returned row.
+
+    What it returns per change is the *highest* analysis_version, not an arbitrary row.
+    A reanalysis (see reanalyze_ceo_demo_assessments) supersedes rather than replaces, so
+    a change can own several versions, and the engine's own `_latest_assessment` -- and
+    therefore anything in the app reading "the" assessment for a change -- resolves the
+    highest one. The reviews and actions seeded off this mapping have to hang off the same
+    row the application would show, or the demo shows a reviewer who signed off on
+    something nobody can see.
     """
     actor_id = (
         await db.execute(
@@ -1128,6 +1136,7 @@ async def _seed_ceo_demo_assessments(
                     ImpactAssessment.organization_id == org_id,
                     ImpactAssessment.regulatory_change_id == change_id,
                 )
+                .order_by(ImpactAssessment.analysis_version.desc())
             )
         ).scalars().first()
         if existing_id is not None:
@@ -1169,8 +1178,11 @@ async def reanalyze_ceo_demo_assessments(db: AsyncSession) -> list[dict]:
 
     Note what it does *not* do: the superseded assessments and their items are left in
     place (the engine supersedes, it does not delete), so the existing ImpactReview and
-    Action rows keep valid foreign keys -- they simply describe version 1. Repointing them
-    at the new items is a separate decision, not this function's.
+    Action rows keep valid foreign keys -- they simply describe version 1.
+
+    Bringing the governance layer up to the new version is seed_ceo_demo's job, not this
+    one's: run the seed again afterwards and it files a review against the new version and
+    re-points the actions at its items, leaving the version 1 review in place as history.
     """
     actor_id = (
         await db.execute(
@@ -1241,6 +1253,17 @@ CEO_DEMO_REVIEWS = [
     ),
 ]
 
+# Appended to the note when the assessment being reviewed is a reanalysis (version > 1).
+# A reanalysis is a new finding, not an amendment to the old one: the portfolio gained its
+# ProductMarket rows, the engine surfaced product-level impact it could not see before, and
+# that broader finding needs its own sign-off. The earlier review of version 1 stays as the
+# historical record -- ImpactReview is append-only, so the trail reads as two decisions by
+# the same reviewer against two successive analyses, which is what actually happened.
+CEO_DEMO_REANALYSIS_REVIEW_NOTE = (
+    " Reviewed following portfolio reanalysis — expanded product-level impact confirmed "
+    "across the broader product set."
+)
+
 
 async def _seed_ceo_demo_reviews(
     db: AsyncSession,
@@ -1256,6 +1279,11 @@ async def _seed_ceo_demo_reviews(
     Keyed on impact_assessment_id: a rerun finds the existing review and files nothing,
     which matters more here than elsewhere because ImpactReview is append-only -- a second
     create would not overwrite the first, it would add a second decision to the trail.
+
+    That key is per *assessment*, not per change, and that is deliberate. After a
+    reanalysis the mapping passed in points at the new version, which carries no review of
+    its own, so this files one -- and the review of the superseded version is left exactly
+    as it was. Two accepted analyses, two decisions, nothing rewritten.
     """
     reviewer_ids = dict(
         (
@@ -1274,6 +1302,16 @@ async def _seed_ceo_demo_reviews(
         ):
             existing["reviews"] += 1
             continue
+
+        version = (
+            await db.execute(
+                select(ImpactAssessment.analysis_version).where(
+                    ImpactAssessment.id == assessment_id
+                )
+            )
+        ).scalars().first()
+        if (version or 1) > 1:
+            notes += CEO_DEMO_REANALYSIS_REVIEW_NOTE
 
         await ReviewService.create_review(
             db,
@@ -1462,6 +1500,16 @@ async def _seed_ceo_demo_actions(
                         )
         else:
             existing["actions"] += 1
+            # Re-point, not re-create. Action is an ordinary mutable row, and after a
+            # reanalysis the item it was created against belongs to a superseded
+            # assessment -- still a live foreign key, but not the analysis the application
+            # shows. Set, don't branch on the old value: the target is recomputed from the
+            # current latest assessment by the same lowest-item-id rule used on creation,
+            # so the second run of a pair computes the same id and writes nothing.
+            target_item_id = first_item.get(change_key)
+            if target_item_id is not None and action.impact_item_id != target_item_id:
+                action.impact_item_id = target_item_id
+                await db.commit()
 
         if await _exists(
             db, Evidence,
